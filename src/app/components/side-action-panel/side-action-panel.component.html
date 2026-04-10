@@ -1,0 +1,59 @@
+<div class="side-panel">
+  <div class="sp-header">
+    <span>Task Actions</span>
+    <button (click)="closeSidePanel()"
+      style="background:none; border:none; color:white; cursor:pointer;">&times;</button>
+  </div>
+  <div class="sp-tabs">
+    <div class="sp-tab" [class.active]="state.sidePanelTab() === 'TASK'" (click)="state.sidePanelTab.set('TASK')">TASK</div>
+    <div class="sp-tab" [class.active]="state.sidePanelTab() === 'SUBMITTAL'" (click)="state.sidePanelTab.set('SUBMITTAL')">
+      SUBMITTAL</div>
+    <div class="sp-tab" [class.active]="state.sidePanelTab() === 'FILES'" (click)="state.sidePanelTab.set('FILES')">FILES</div>
+  </div>
+
+  <div class="sp-body" style="overflow-y: auto; flex: 1;">
+    @if (state.sidePanelTab() === 'TASK') {
+    <div class="sp-section">
+      <div class="sp-section-toggle">Actions</div>
+      <div class="sp-actions">
+        @if (!state.selectedTask()?.isClaimed) {
+        <div class="sp-action" (click)="state.claimTask()" style="color: var(--primary-color); font-weight: bold;">Claim
+          Task</div>
+        } @else {
+        <div class="sp-action" style="color: var(--success-color); font-weight: bold; cursor: default;">Claimed by {{
+          state.selectedTask()?.claimedBy }}</div>
+        }
+        <div class="sp-action" (click)="state.approveTask()">Approve</div>
+        <div class="sp-action" (click)="state.declineTask()">Decline</div>
+        <div class="sp-action" (click)="state.isTransmittalModalOpen.set(true)"
+          style="color: var(--primary-color); font-weight: bold;">Create Transmittal</div>
+        <div class="sp-action">Copy...</div>
+        <div class="sp-action" (click)="state.exportData()">Export Data</div>
+        <div class="sp-action">Delete</div>
+      </div>
+    </div>
+    <div class="sp-section">
+      <div class="sp-section-toggle">History</div>
+      <div class="sp-actions">
+        <div class="sp-action" (click)="state.openHistoryModal()">View History</div>
+        <div class="sp-action">Manage Vaults...</div>
+      </div>
+    </div>
+    } @else if (state.sidePanelTab() === 'SUBMITTAL') {
+    <div class="sp-section">
+      <div class="sp-section-toggle">Submittal Details</div>
+      <div style="padding: 12px; font-size: 11px;">
+        <div><strong>Contract:</strong> {{ state.selectedTask()?.id }}</div>
+        <div style="margin-top: 8px;"><strong>Reason:</strong> {{ state.selectedTask()?.reasonForIssue }}</div>
+      </div>
+    </div>
+    } @else {
+    <div class="sp-section">
+      <div class="sp-section-toggle">Attachments</div>
+      <div class="sp-actions">
+        <div class="sp-action" (click)="state.downloadAttachment()">{{ state.selectedTask()?.correspondenceNo }}.pdf</div>
+      </div>
+    </div>
+    }
+  </div>
+</div>

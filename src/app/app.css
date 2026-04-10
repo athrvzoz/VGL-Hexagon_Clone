@@ -1,0 +1,50 @@
+:root {
+  --primary-color: #003366;
+  --secondary-color: #1a1a1a;
+  --bg-color: #ffffff;
+  --sidebar-bg: #f5f7f9;
+  --header-bg: #003366;
+  --border-color: #d1d9e0;
+  --text-color: #333333;
+  --text-secondary: #5f6368;
+  --hover-bg: #f1f3f4;
+  --active-tab-bg: #ffffff;
+  --active-tab-text: #003366;
+  --danger-color: #d93025;
+  --success-color: #188038;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 12px;
+  color: var(--text-color);
+  background: var(--bg-color);
+  overflow: hidden;
+}
+
+.app-container {
+  display: grid;
+  grid-template-areas:
+    "header header"
+    "sidebar main";
+  grid-template-columns: 240px 1fr;
+  grid-template-rows: 40px 1fr;
+  height: 100vh;
+  width: 100vw;
+}
+
+.main-content {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: white;
+}

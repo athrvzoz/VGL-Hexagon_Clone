@@ -1,0 +1,158 @@
+<div class="bottom-panel">
+  <div class="bottom-tabs">
+    <div class="btab" [class.active]="state.bottomPanelTab() === 'DETAILS'" (click)="state.bottomPanelTab.set('DETAILS')">
+      DETAILS</div>
+    <div class="btab" [class.active]="state.bottomPanelTab() === 'CONTRACT'" (click)="state.bottomPanelTab.set('CONTRACT')">
+      CONTRACT</div>
+    <div class="btab" [class.active]="state.bottomPanelTab() === 'STRUCTURE'" (click)="state.bottomPanelTab.set('STRUCTURE')">
+      STRUCTURE</div>
+    <div class="btab" [class.active]="state.bottomPanelTab() === 'HISTORY'" (click)="state.bottomPanelTab.set('HISTORY')">
+      HISTORY</div>
+  </div>
+  <div class="bottom-panel-body">
+    @if (state.bottomPanelTab() === 'DETAILS') {
+    <div class="detail-section-container">
+      <div class="detail-section-header">ENS details <span>⌄</span></div>
+      <div class="detail-content-grid">
+        <div class="detail-row">
+          <span class="detail-label">Suppress ENS:</span>
+          <span class="detail-value"><input type="checkbox" checked></span>
+        </div>
+      </div>
+    </div>
+    <div class="detail-section-container">
+      <div class="detail-section-header">Distribution <span>⌄</span></div>
+      <div class="detail-content-grid">
+        <div class="detail-row">
+          <span class="detail-label">From organization:</span>
+          <span class="detail-value">WOR</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">From role:</span>
+          <span class="detail-value"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">From user:</span>
+          <span class="detail-value">{{ state.selectedTask()?.fromUser }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Contract:</span>
+          <span class="detail-value">{{ state.selectedTask()?.id }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Submittal Type:</span>
+          <span class="detail-value">{{ state.selectedTask()?.submittalType }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">To organization:</span>
+          <span class="detail-value">VGL</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">To role:</span>
+          <span class="detail-value">Document Control</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">To user:</span>
+          <span class="detail-value">{{ state.selectedTask()?.toUser }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">To CC User:</span>
+          <span class="detail-value"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Disciplines:</span>
+          <span class="detail-value" style="color: #003366; text-decoration: underline;">{{
+            state.extractDiscipline(state.selectedTask()?.correspondenceNo) }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="detail-section-container highlight-section">
+      <div class="detail-section-header">Issue details <span>⌄</span></div>
+      <div class="detail-content-grid" style="background: transparent;">
+        <div class="detail-row">
+          <span class="detail-label">Reason for issue:</span>
+          <span class="detail-value" style="color: #003366; text-decoration: underline;">{{
+            state.selectedTask()?.reasonForIssue }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Issue state:</span>
+          <span class="detail-value">SUBMITTED</span>
+        </div>
+        <div class="detail-row" style="grid-column: 1 / -1;">
+          <span class="detail-label">Details:</span>
+          <span class="detail-value">{{ state.selectedTask()?.details }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Suggested Due date:</span>
+          <span class="detail-value">{{ state.selectedTask()?.targetDate }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="detail-section-container">
+      <div class="detail-section-header">Owning group <span>⌄</span></div>
+    </div>
+    } @else if (state.bottomPanelTab() === 'CONTRACT') {
+    <div class="detail-section-container">
+      <div class="detail-section-header">Contract Overview <span>⌄</span></div>
+      <div class="detail-content-grid">
+        <div class="detail-row">
+          <span class="detail-label">Contract ID:</span>
+          <span class="detail-value">{{ state.selectedTask()?.id }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Project:</span>
+          <span class="detail-value">{{ state.selectedTask()?.project }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Contract Type:</span>
+          <span class="detail-value">EPC - Engineering Procurement and Construction</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Scope:</span>
+          <span class="detail-value">Balance of Plant (BOP)</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Owner:</span>
+          <span class="detail-value">VGL Global Logistics</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Contract Status:</span>
+          <span class="detail-value" style="color: var(--success-color); font-weight: bold;">ACTIVE</span>
+        </div>
+      </div>
+    </div>
+    <div class="detail-section-container">
+      <div class="detail-section-header">Project Attributes <span>⌄</span></div>
+      <div class="detail-content-grid">
+        <div class="detail-row">
+          <span class="detail-label">Region:</span>
+          <span class="detail-value">Offshore - North Sea</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Discipline:</span>
+          <span class="detail-value">{{ state.extractDiscipline(state.selectedTask()?.correspondenceNo) }}</span>
+        </div>
+      </div>
+    </div>
+    } @else if (state.bottomPanelTab() === 'STRUCTURE') {
+    <div style="padding: 24px; color: var(--text-secondary); text-align: center;">
+      No structure data available for this task.
+    </div>
+    } @else if (state.bottomPanelTab() === 'HISTORY') {
+    <div class="history-list">
+      @for (h of state.historyTasks(); track h.id) {
+      <div class="history-card">
+        <div class="hc-header">
+          <span class="hc-rev">{{ h.revision }}</span>
+          <span class="hc-date">{{ h.creationDate }}</span>
+        </div>
+        <div class="hc-body">
+          <strong>{{ h.correspondenceNo }}</strong>
+          <div class="hc-status" [attr.data-status]="h.status">{{ h.status }}</div>
+        </div>
+      </div>
+      }
+    </div>
+    }
+  </div>
+</div>

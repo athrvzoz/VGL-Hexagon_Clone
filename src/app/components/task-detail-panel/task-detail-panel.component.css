@@ -1,0 +1,141 @@
+.bottom-panel {
+  height: 300px;
+  border-top: 2px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+.bottom-tabs {
+  display: flex;
+  background: #f8f9fa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.btab {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.btab.active {
+  background: white;
+  border-bottom: 2px solid var(--primary-color);
+}
+
+.bottom-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 250px;
+}
+
+.detail-section-container {
+  padding: 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.detail-section-header {
+  background: #f0f2f5;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.detail-content-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 16px;
+  padding: 12px;
+  background: white;
+}
+
+.detail-row {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.detail-label {
+  color: var(--text-secondary);
+  min-width: 120px;
+  text-align: right;
+}
+
+.detail-value {
+  color: var(--text-color);
+  font-weight: 500;
+  white-space: normal;
+  word-wrap: break-word;
+}
+
+.highlight-section {
+  background: #fdf2f2;
+}
+
+/* History Cards */
+.history-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  background: white;
+  transition: transform 0.2s, box-shadow 0.2s;
+  cursor: default;
+}
+
+.history-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+.hc-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.hc-rev {
+  font-weight: bold;
+  color: var(--primary-color);
+  font-size: 10px;
+}
+
+.hc-date {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.hc-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hc-body strong {
+  font-size: 12px;
+}
+
+.hc-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f1f3f4;
+}
+
+.hc-status[data-status="Closed"] {
+  background: #e6f4ea;
+  color: #137333;
+}

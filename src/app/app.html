@@ -1,0 +1,31 @@
+<div class="app-container">
+  <!-- Top Header Component -->
+  <app-header></app-header>
+
+  <!-- Left Sidebar Component -->
+  <app-sidebar></app-sidebar>
+
+  <!-- Main Content Area -->
+  <main class="main-content">
+    @if (state.viewMode() === 'DASHBOARD') {
+      <app-dashboard></app-dashboard>
+    } @else {
+      <app-history-detail></app-history-detail>
+    }
+
+    <!-- Bottom Detail Panel -->
+    @if (state.isBottomPanelOpen()) {
+      <app-task-detail-panel></app-task-detail-panel>
+    }
+  </main>
+
+  <!-- Side Panel -->
+  @if (state.isSidePanelOpen()) {
+    <app-side-action-panel></app-side-action-panel>
+  }
+</div>
+
+<!-- Transmittal Modal -->
+@if (state.isTransmittalModalOpen()) {
+  <app-transmittal-modal></app-transmittal-modal>
+}

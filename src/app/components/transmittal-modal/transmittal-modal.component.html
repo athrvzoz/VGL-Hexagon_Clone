@@ -1,0 +1,164 @@
+<div class="modal-backdrop">
+  <div class="modal-container">
+    <div class="modal-header-main">
+      <div class="modal-title">New Create Incoming Transmittal</div>
+      <button (click)="closeModal()"
+        style="background:none; border:none; font-size: 18px; cursor:pointer;">&times;</button>
+    </div>
+    <div class="modal-tabs">
+      <div class="modal-tab" [class.active]="state.transmittalModalTab() === 'DISTRIBUTION'"
+        (click)="state.transmittalModalTab.set('DISTRIBUTION')">DISTRIBUTION</div>
+      <div class="modal-tab" [class.active]="state.transmittalModalTab() === 'STRUCTURE'"
+        (click)="state.transmittalModalTab.set('STRUCTURE')">STRUCTURE</div>
+      <div class="modal-tab" [class.active]="state.transmittalModalTab() === 'HISTORY'"
+        (click)="state.transmittalModalTab.set('HISTORY')">HISTORY</div>
+    </div>
+    <div class="modal-body-content">
+      @if (state.transmittalModalTab() === 'DISTRIBUTION') {
+      <div class="form-section">
+        <div class="detail-section-header">Distribution <span>⌄</span></div>
+        <div class="form-grid">
+          <div class="form-field">
+            <span class="form-label">From organization*</span>
+            <select class="form-input">
+              <option>WOR</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">From role</span>
+            <select class="form-input" disabled>
+              <option>Requires parent selection</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">From user</span>
+            <input type="text" class="form-input" [value]="state.selectedTask()?.fromUser" readonly>
+          </div>
+          <div class="form-field">
+            <span class="form-label">Contract*</span>
+            <select class="form-input">
+              <option>{{ state.selectedTask()?.id }}</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">To organization*</span>
+            <select class="form-input">
+              <option>VGL</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">To role</span>
+            <select class="form-input" disabled>
+              <option>Requires parent selection</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">To user</span>
+            <select class="form-input">
+              <option>{{ state.selectedTask()?.toUser }}</option>
+              <option>Doe, Jane</option>
+              <option>Davis, Miles</option>
+              <option>Coltrane, John</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">To CC User</span>
+            <div style="display: flex; gap: 4px;">
+              <input type="text" class="form-input">
+              <button class="toolbar-btn">🔍</button>
+            </div>
+          </div>
+          <div class="form-field" style="grid-column: 1 / span 3;">
+            <span class="form-label">Disciplines</span>
+            <select class="form-input">
+              <option [selected]="state.extractDiscipline(state.selectedTask()?.correspondenceNo) === 'DMG'">DMG</option>
+              <option>ACC</option>
+              <option>ADM</option>
+              <option>AMT</option>
+              <option>ARC</option>
+              <option>ASR</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="detail-section-header">Details <span>⌄</span></div>
+        <div class="form-grid">
+          <div class="form-field">
+            <span class="form-label">Name*</span>
+            <input type="text" class="form-input" [value]="state.selectedTask()?.correspondenceNo">
+          </div>
+          <div class="form-field" style="grid-column: span 2;">
+            <span class="form-label">Title*</span>
+            <input type="text" class="form-input" [value]="state.selectedTask()?.title">
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="detail-section-header">Document Details <span>⌄</span></div>
+        <div class="form-grid">
+          <div class="form-field">
+            <span class="form-label">Document Type*</span>
+            <select class="form-input">
+              <option>Please select...</option>
+              <option>ACT</option>
+              <option>ADD</option>
+              <option>AFE</option>
+              <option>AGE</option>
+              <option>AGR</option>
+              <option>ALN</option>
+              <option>AMX</option>
+              <option>ANA</option>
+              <option>APP</option>
+              <option>APR</option>
+              <option>ASM</option>
+              <option>AUD</option>
+              <option>BAT</option>
+              <option>BID</option>
+              <option>BLD</option>
+              <option>BLK</option>
+              <option>BOD</option>
+              <option>BOM</option>
+              <option>BRG</option>
+              <option>BUD</option>
+              <option>BUL</option>
+              <option>C03</option>
+              <option>C20</option>
+              <option>C4C</option>
+              <option>CAL</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="detail-section-header">Issue details <span>⌄</span></div>
+        <div class="form-grid">
+          <div class="form-field">
+            <span class="form-label">Reason for issue*</span>
+            <select class="form-input">
+              <option>{{ state.selectedTask()?.reasonForIssue }}</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <span class="form-label">Issue state</span>
+            <input type="text" class="form-input" value="RESERVED" readonly>
+          </div>
+          <div class="form-field" style="grid-column: 1 / span 3;">
+            <span class="form-label">Details</span>
+            <textarea class="form-input form-textarea" [value]="state.selectedTask()?.details"></textarea>
+          </div>
+          <div class="form-field">
+            <span class="form-label">Suggested Due date</span>
+            <input type="date" class="form-input" [value]="state.selectedTask()?.targetDate">
+          </div>
+        </div>
+      </div>
+      }
+    </div>
+    <div class="modal-footer">
+      <button class="modal-btn secondary" (click)="closeModal()">CANCEL</button>
+      <button class="modal-btn secondary">APPLY</button>
+      <button class="modal-btn primary" (click)="state.finishTransmittal()">FINISH</button>
+    </div>
+  </div>
+</div>

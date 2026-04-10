@@ -1,0 +1,50 @@
+<aside class="sidebar">
+  <div class="nav-section-title">STATISTICS</div>
+  <div class="stats-section">
+    <div class="pie-chart" [style.background]="state.pieChartGradient()"></div>
+    <div class="stats-legend">
+      <div class="legend-item">
+        <span class="dot blue"></span> <span>Claimed: {{ state.claimedCount() }}</span>
+      </div>
+      <div class="legend-item">
+        <span class="dot orange"></span> <span>Submitted: {{ state.submittedCount() }}</span>
+      </div>
+      <div class="legend-item">
+        <span class="dot green"></span> <span>Closed: {{ state.closedCount() }}</span>
+      </div>
+      <div class="legend-item">
+        <span class="dot red"></span> <span>Overdue: {{ state.overdueCount() }}</span>
+      </div>
+      <div class="legend-item">
+        <span class="dot grey"></span> <span>All Tasks: {{ state.unclaimedCount() }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="nav-section-title" style="margin-top: 12px;">VIEWS</div>
+  <div class="nav-item" [class.active]="state.activeView() === 'All'" (click)="state.activeView.set('All')">
+    <span>All Tasks</span>
+    <span class="count-badge main">{{ state.unclaimedCount() }}</span>
+  </div>
+  <div class="nav-item" [class.active]="state.activeView() === 'MyTasks'" (click)="state.activeView.set('MyTasks')">
+    <span>Personal Claimed Tasks</span>
+    <span class="count-badge claimed">{{ state.claimedCount() }}</span>
+  </div>
+  <div class="nav-item" [class.active]="state.activeView() === 'Submitted'" (click)="state.activeView.set('Submitted')">
+    <span>Submitted</span>
+    <span class="count-badge submitted">{{ state.submittedCount() }}</span>
+  </div>
+  <div class="nav-item" [class.active]="state.activeView() === 'Closed'" (click)="state.activeView.set('Closed')">
+    <span>Closed Task</span>
+    <span class="count-badge closed">{{ state.closedCount() }}</span>
+  </div>
+  <div class="nav-item" [class.active]="state.activeView() === 'Overdue'" (click)="state.activeView.set('Overdue')">
+    <span>Overdue</span>
+    <span class="count-badge overdue">{{ state.overdueCount() }}</span>
+  </div>
+
+  <div class="nav-section-title" style="margin-top: 12px;">RELATIONSHIPS</div>
+  <div class="nav-item">Show All Files</div>
+  <div class="nav-item">Show Class Object</div>
+  <div class="nav-item">Show Viewable Files</div>
+</aside>

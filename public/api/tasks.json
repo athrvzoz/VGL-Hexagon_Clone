@@ -1,0 +1,58 @@
+[
+  {
+    "id": "TASK-1001",
+    "Correspondence number": "C2-DMG-WOR-VGL-TRN-38001-26",
+    "Step Name": "Review Submittal...",
+    "Submittal Description": "STO",
+    "Reason for Issue": "Information",
+    "Submittal Type": "Technical",
+    "Target Date": "3/1/2026",
+    "Creation Date": "3/24/2026 08:10:00",
+    "Details": "Sample details for the contract su...",
+    "Project": "C2 PROJECT",
+    "Is Claimed": false,
+    "Status": "All"
+  },
+  {
+    "id": "TASK-1002",
+    "Correspondence number": "C2-DMG-WOR-VGL-TRN-38002-26",
+    "Step Name": "Review Submittal D...",
+    "Submittal Description": "LST",
+    "Reason for Issue": "Review",
+    "Submittal Type": "Supplier",
+    "Target Date": "3/2/2026",
+    "Creation Date": "3/24/2026 09:17:00",
+    "Details": "Sample details for the contract su...",
+    "Project": "C2 PROJECT",
+    "Is Claimed": false,
+    "Status": "All"
+  },
+  {
+    "id": "TASK-1003",
+    "Correspondence number": "CX-DMG-WOR-VGL-TRN-38072-26",
+    "Step Name": "Review Submittal...",
+    "Submittal Description": "CX Electrical Design Specification",
+    "Reason for Issue": "Information",
+    "Submittal Type": "Technical",
+    "Target Date": "3/1/2026",
+    "Creation Date": "3/24/2026 08:10:00",
+    "Details": "Sample details for the contract su...",
+    "Project": "CX PROJECT",
+    "Is Claimed": false,
+    "Status": "All"
+  },
+  {
+    "id": "TASK-1004",
+    "Correspondence number": "ML-DMG-WOR-VGL-TRN-38080-26",
+    "Step Name": "Review Submittal E...",
+    "Submittal Description": "ML Pipeline Route Survey Report",
+    "Reason for Issue": "In formal rev",
+    "Submittal Type": "Technical",
+    "Target Date": "3/3/2026",
+    "Creation Date": "3/24/2026 10:24:00",
+    "Details": "Sample details for the contract su...",
+    "Project": "ML MARAIS LATERAL",
+    "Is Claimed": false,
+    "Status": "All"
+  }
+]

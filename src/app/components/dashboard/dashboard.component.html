@@ -1,0 +1,55 @@
+<!-- Project Tabs -->
+<div class="project-tabs">
+  @for (project of state.projects; track project) {
+  <div class="project-tab" [class.active]="state.selectedProject() === project" (click)="state.selectProject(project)">
+    {{ project }}
+  </div>
+  }
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="toolbar-left">
+    <span class="row-count">{{ state.filteredTasks().length }} items</span>
+  </div>
+  <div class="toolbar-right">
+    <button class="toolbar-btn" (click)="state.exportData()">EXPORT ALL TO EXCEL</button>
+    <button class="toolbar-btn">DEFAULT LIST</button>
+  </div>
+</div>
+
+<!-- Data Table -->
+<div class="table-wrapper">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 30px;"><input type="checkbox"></th>
+        <th style="width: 200px;">Correspondence No.</th>
+        <th style="width: 100px;">Author</th>
+        <th style="width: 150px;">Step Name</th>
+        <th style="width: 300px;">Submittal Description</th>
+        <th style="width: 100px;">Reason for Issue</th>
+        <th style="width: 100px;">Type</th>
+        <th style="width: 80px;">Target Date</th>
+        <th style="width: 120px;">Creation Date</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (task of state.filteredTasks(); track task.id; let i = $index) {
+      <tr (click)="state.selectTask(task)" [class.selected]="state.selectedTask()?.id === task.id" [class.even]="i % 2 === 0">
+        <td><input type="checkbox" (click)="$event.stopPropagation()"></td>
+        <td>{{ task.correspondenceNo }}</td>
+        <td>{{ task.author }}</td>
+        <td>{{ task.stepName }}</td>
+        <td>{{ task.submittalDescription }}</td>
+        <td>{{ task.reasonForIssue }}</td>
+        <td>{{ task.submittalType }}</td>
+        <td>{{ task.targetDate }}</td>
+        <td>{{ task.creationDate }}</td>
+        <td>{{ task.details }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
+</div>

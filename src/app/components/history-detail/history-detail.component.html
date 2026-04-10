@@ -1,0 +1,71 @@
+<!-- History Detail View (Full Page) -->
+<div class="toolbar">
+  <div class="toolbar-left" style="display: flex; gap: 12px; align-items: center;">
+    <button class="toolbar-btn" (click)="backToDashboard()" style="padding: 4px 8px;">← BACK</button>
+    <span class="row-count" style="font-weight: bold; color: var(--primary-color);">HISTORY: {{
+      state.selectedTask()?.correspondenceNo }}</span>
+  </div>
+  <div class="toolbar-right">
+    <button class="toolbar-btn" (click)="state.exportData()">EXPORT ALL TO EXCEL</button>
+    <button class="toolbar-btn">▼ DEFAULT LIST</button>
+    <button class="toolbar-btn">📝</button>
+  </div>
+</div>
+
+<div class="table-wrapper history-full-page-wrapper">
+  <table class="data-table history-full-page-table">
+    <thead>
+      <tr>
+        <th style="width: 40px; text-align: center;"><input type="checkbox"></th>
+        <th style="width: 30px;"></th> <!-- Hamburger -->
+        <th style="width: 30px;"></th> <!-- 3 Dots -->
+        <th style="width: 250px;">VGRevName</th>
+        <th style="width: 60px;">Rev</th>
+        <th style="width: 150px;">Issue Date</th>
+        <th style="width: 300px;">VGRevDescription</th>
+        <th style="width: 60px;">Iss...</th>
+        <th style="width: 120px;">Return status...</th>
+        <th style="width: 120px;">Contractor Do...</th>
+        <th style="width: 120px;">Purchase Orde...</th>
+        <th style="width: 80px;">Ori...</th>
+        <th style="width: 150px;">Contract</th>
+        <th style="width: 100px;">Planned IP</th>
+        <th style="width: 80px;">Col...</th>
+        <th style="width: 150px;">Rev Creation Date</th>
+        <th style="width: 150px;">Rev Creation User</th>
+        <th style="width: 150px;">Last Updated</th>
+        <th style="width: 100px;">Do...</th>
+        <th style="width: 150px;">Version Creation Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (h of state.historyTasks(); track h.id; let i = $index) {
+      <tr [class.even]="i % 2 === 0">
+        <td style="text-align: center;"><input type="checkbox"></td>
+        <td><span class="table-icon">☰</span></td>
+        <td><span class="table-icon">⋮</span></td>
+        <td class="link-cell">
+          <span class="file-icon" [style.color]="h.revision === '0' ? '#4caf50' : '#2196f3'">📄</span>
+          {{ h.vgRevName }}
+        </td>
+        <td>{{ h.revision }}</td>
+        <td>{{ h.issueDate }}</td>
+        <td>{{ h.vgRevDescription }}</td>
+        <td>{{ h.reasonForIssue }}</td>
+        <td>{{ h.returnStatus }}</td>
+        <td>{{ h.contractorDocNo }}</td>
+        <td>{{ h.purchaseOrder }}</td>
+        <td>{{ h.originator }}</td>
+        <td>{{ h.contract || 'C2 EPC - BOP' }}</td>
+        <td>{{ h.plannedIP }}</td>
+        <td>{{ h.collector }}</td>
+        <td>{{ h.revCreationDate }}</td>
+        <td>{{ h.revCreationUser }}</td>
+        <td>{{ h.lastUpdated }}</td>
+        <td><span class="status-badge" [attr.data-status]="h.docStatus">{{ h.docStatus }}</span></td>
+        <td>{{ h.versionCreationDate }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
+</div>

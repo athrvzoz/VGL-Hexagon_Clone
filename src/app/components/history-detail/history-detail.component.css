@@ -1,0 +1,101 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.toolbar {
+  padding: 6px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: white;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.toolbar-btn {
+  padding: 4px 10px;
+  font-size: 10px;
+  background: #f8f9fa;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.history-full-page-wrapper {
+  overflow: auto;
+  background: #f8f9fa;
+  flex: 1;
+}
+
+.history-full-page-table {
+  min-width: 2500px;
+  background: white;
+  border-collapse: collapse;
+}
+
+.history-full-page-table th {
+  background: #f1f3f4;
+  font-size: 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.history-full-page-table td {
+  padding: 8px 12px;
+  border-right: 1px solid #f1f3f4;
+  border-bottom: 1px solid #f1f3f4;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.table-icon {
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.file-icon {
+  font-size: 16px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.link-cell {
+  color: #003366;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: bold;
+  text-transform: uppercase;
+  display: inline-block;
+}
+
+.status-badge[data-status="Current"] {
+  background: #e6f4ea;
+  color: #137333;
+  border: 1px solid #c2e7cc;
+}
+
+.status-badge[data-status="SUBMIT..."] {
+  background: #e8f0fe;
+  color: #1a73e8;
+  border: 1px solid #d2e3fc;
+}
+
+tr.even {
+  background: #fafafa;
+}
