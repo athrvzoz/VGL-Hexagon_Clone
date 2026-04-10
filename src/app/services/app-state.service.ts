@@ -82,6 +82,27 @@ export class AppStateService {
     )`;
   });
 
+  // Simple 2-segment pie: Claimed vs Unclaimed (All Tasks)
+  simplePieData = computed(() => {
+    const total = this.totalCount();
+    const claimed = this.claimedCount();
+    const unclaimed = total - claimed;
+    if (total === 0) return { claimedPct: 0, unclaimedPct: 100, total, claimed, unclaimed };
+    return {
+      claimedPct: (claimed / total) * 100,
+      unclaimedPct: (unclaimed / total) * 100,
+      total,
+      claimed,
+      unclaimed
+    };
+  });
+
+  // CSS conic-gradient for simple 2-color pie (red = claimed, navy = all)
+  simplePieGradient = computed(() => {
+    const pct = this.simplePieData().claimedPct;
+    return `conic-gradient(#c62828 0% ${pct}%, #1a237e ${pct}% 100%)`;
+  });
+
   // Shared Actions
   selectTask(task: ContractTask) {
     this.selectedTask.set(task);

@@ -11,4 +11,12 @@ import { AppStateService } from '../../services/app-state.service';
 })
 export class DashboardComponent {
   state = inject(AppStateService);
+
+  getStepIconClass(stepName: string): string {
+    const name = stepName?.toLowerCase() ?? '';
+    if (name.includes('transmittal')) return 'step-icon--orange';
+    if (name.includes('submittal')) return 'step-icon--blue';
+    if (name.includes('review')) return 'step-icon--green';
+    return 'step-icon--grey';
+  }
 }

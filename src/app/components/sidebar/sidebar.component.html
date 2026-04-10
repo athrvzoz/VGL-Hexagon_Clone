@@ -1,22 +1,17 @@
 <aside class="sidebar">
   <div class="nav-section-title">STATISTICS</div>
   <div class="stats-section">
-    <div class="pie-chart" [style.background]="state.pieChartGradient()"></div>
-    <div class="stats-legend">
-      <div class="legend-item">
-        <span class="dot blue"></span> <span>Claimed: {{ state.claimedCount() }}</span>
+    <div class="pie-chart" [style.background]="state.simplePieGradient()"></div>
+    <div class="pie-legend">
+      <div class="legend-row">
+        <span class="legend-dot navy"></span>
+        <span class="legend-label">All Tasks</span>
+        <span class="legend-count">{{ state.simplePieData().total }}</span>
       </div>
-      <div class="legend-item">
-        <span class="dot orange"></span> <span>Submitted: {{ state.submittedCount() }}</span>
-      </div>
-      <div class="legend-item">
-        <span class="dot green"></span> <span>Closed: {{ state.closedCount() }}</span>
-      </div>
-      <div class="legend-item">
-        <span class="dot red"></span> <span>Overdue: {{ state.overdueCount() }}</span>
-      </div>
-      <div class="legend-item">
-        <span class="dot grey"></span> <span>All Tasks: {{ state.unclaimedCount() }}</span>
+      <div class="legend-row">
+        <span class="legend-dot red"></span>
+        <span class="legend-label">Claimed Tasks</span>
+        <span class="legend-count claimed">{{ state.simplePieData().claimed }}</span>
       </div>
     </div>
   </div>

@@ -90,3 +90,79 @@
 .data-table tr.even {
   background: #fafafa;
 }
+
+/* Row Icons in Correspondence No. column */
+.corr-no-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.row-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.row-icon:hover {
+  opacity: 1;
+  background: #e0e0e0;
+}
+
+.badge-icon {
+  background: #e53935;
+  color: white;
+  font-size: 9px;
+  font-weight: bold;
+  border-radius: 50%;
+  width: 15px;
+  height: 15px;
+  opacity: 1;
+  flex-shrink: 0;
+}
+
+.badge-icon:hover {
+  background: #c62828;
+}
+
+/* Step Name column icons */
+.step-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  color: white;
+}
+
+.step-icon--green  { background: #2e7d32; }
+.step-icon--orange { background: #e65100; }
+.step-icon--blue   { background: #1565c0; }
+.step-icon--grey   { background: #757575; }
+
+
