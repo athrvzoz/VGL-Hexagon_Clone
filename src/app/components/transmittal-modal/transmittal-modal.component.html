@@ -37,7 +37,12 @@
           <div class="form-field">
             <span class="form-label">Contract*</span>
             <select class="form-input">
-              <option>{{ state.selectedTask()?.id }}</option>
+              <option>
+                {{ state.selectedTask()?.id }}
+                @if (state.selectedTask()?.comment) {
+                  - Note: {{ state.selectedTask()?.comment }}
+                }
+              </option>
             </select>
           </div>
           <div class="form-field">

@@ -32,9 +32,35 @@ export interface ContractTask {
   docStatus?: string;
   versionCreationDate?: string;
   contract?: string;
+  comment?: string;
+  attachments?: string[];
+  loadsheetVariant?: 'pass' | 'fake';
 }
 
 export interface Project {
   id: string;
   name: string;
+}
+
+// --- Bot validation report (pushed in from the headed automation bot) ---
+export type BotStatus = 'reviewing' | 'pass' | 'fail';
+
+export interface BotCheck {
+  name: string;
+  status: 'PASS' | 'FAIL' | 'WARN';
+  detail: string;
+}
+
+export interface BotStage {
+  title: string;
+  ok: boolean;
+  checks: BotCheck[];
+}
+
+export interface ValidationReport {
+  loadsheet: string;
+  overall: 'VALID' | 'INVALID';
+  headline: string;
+  reasons: string[];
+  stages: BotStage[];
 }

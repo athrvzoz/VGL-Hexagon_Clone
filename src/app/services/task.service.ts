@@ -51,7 +51,9 @@ export class TaskService {
         revCreationUser: "VLG01F/BDabhole",
         lastUpdated: "3/30/2026 05:35:49",
         docStatus: "SUBMIT...",
-        versionCreationDate: "3/30/2026 05:35:23"
+        versionCreationDate: "3/30/2026 05:35:23",
+        attachments: item["Attachments"],
+        loadsheetVariant: item["Loadsheet Variant"]
       }) as ContractTask)),
       catchError(err => {
         console.error(`Failed to load tasks for project: ${projectName}`, err);

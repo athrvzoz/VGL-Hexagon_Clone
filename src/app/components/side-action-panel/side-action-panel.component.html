@@ -43,7 +43,13 @@
     <div class="sp-section">
       <div class="sp-section-toggle">Submittal Details</div>
       <div style="padding: 12px; font-size: 11px;">
-        <div><strong>Contract:</strong> {{ state.selectedTask()?.id }}</div>
+        <div><strong>Contract:</strong> 
+          @if (state.selectedTask()?.comment) {
+            <span class="sticky-note-wrapper" [attr.data-comment]="state.selectedTask()?.comment">{{ state.selectedTask()?.id }}</span>
+          } @else {
+            {{ state.selectedTask()?.id }}
+          }
+        </div>
         <div style="margin-top: 8px;"><strong>Reason:</strong> {{ state.selectedTask()?.reasonForIssue }}</div>
       </div>
     </div>
@@ -51,7 +57,13 @@
     <div class="sp-section">
       <div class="sp-section-toggle">Attachments</div>
       <div class="sp-actions">
-        <div class="sp-action" (click)="state.downloadAttachment()">{{ state.selectedTask()?.correspondenceNo }}.pdf</div>
+        @if (state.selectedTask()?.attachments?.length) {
+          @for (file of state.selectedTask()?.attachments; track file) {
+            <div class="sp-action" (click)="state.downloadAttachment(file)">{{ file }}</div>
+          }
+        } @else {
+          <div class="sp-action" (click)="state.downloadAttachment()">{{ state.selectedTask()?.correspondenceNo }}.pdf</div>
+        }
       </div>
     </div>
     }

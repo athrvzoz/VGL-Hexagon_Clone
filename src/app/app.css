@@ -48,3 +48,59 @@ body {
   overflow: hidden;
   background: white;
 }
+
+/* Toast Styles */
+.global-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: 12px 24px;
+  border-radius: var(--radius-md);
+  color: white;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 9999;
+  animation: slideUpToast 0.3s ease-out;
+}
+
+.toast-info { background: var(--primary-color); }
+.toast-success { background: var(--success-color); }
+.toast-error { background: var(--danger-color); }
+
+@keyframes slideUpToast {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Sticky Note Tooltip */
+.sticky-note-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sticky-note-wrapper[data-comment]::after {
+  content: "📝";
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.sticky-note-wrapper[data-comment]:hover::before {
+  content: attr(data-comment);
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 5px;
+  background: #fff9c4;
+  color: #333;
+  padding: 8px 12px;
+  border: 1px solid #fbc02d;
+  box-shadow: 2px 4px 8px rgba(0,0,0,0.2);
+  white-space: pre-wrap;
+  z-index: 1000;
+  min-width: 150px;
+  max-width: 300px;
+  border-radius: 2px;
+  font-family: 'Segoe Print', 'Comic Sans MS', sans-serif;
+  font-size: 11px;
+}

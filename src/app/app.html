@@ -29,3 +29,81 @@
 @if (state.isTransmittalModalOpen()) {
   <app-transmittal-modal></app-transmittal-modal>
 }
+
+<!-- Global Toast -->
+@if (state.globalToast(); as toast) {
+  <div class="global-toast" [class.toast-success]="toast.type === 'success'" [class.toast-error]="toast.type === 'error'" [class.toast-info]="toast.type === 'info'">
+    {{ toast.message }}
+  </div>
+}
+
+<!-- Comment Modal -->
+@if (state.isCommentModalOpen()) {
+  <div class="modal-backdrop" style="z-index: 2000;">
+    <div class="modal-container" style="max-width: 400px; height: auto; display: flex; flex-direction: column;">
+      <div class="modal-header-main" style="padding: 15px;">
+        <div class="modal-title">Add Comment</div>
+        <button (click)="state.cancelComment()" style="background:none; border:none; font-size: 18px; cursor:pointer;">&times;</button>
+      </div>
+      <div class="modal-body-content" style="padding: 15px; overflow: visible;">
+        <div class="form-field" style="width: 100%;">
+          <span class="form-label">Sticky Note Comment</span>
+          <textarea #commentInput class="form-input form-textarea" 
+                    [value]="state.commentText()" 
+                    (input)="state.commentText.set(commentInput.value)" 
+                    rows="4" 
+                    placeholder="Enter comment to attach to this entry..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 15px;">
+        <button class="modal-btn secondary" (click)="state.cancelComment()">CANCEL</button>
+        <button class="modal-btn primary" (click)="state.submitComment()">SAVE</button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- Bot Validation Report Modal -->
+@if (state.reportModalTaskId(); as rid) {
+  @if (state.botReports()[rid]; as report) {
+    <div class="report-backdrop" (click)="state.closeReport()">
+      <div class="report-card" (click)="$event.stopPropagation()">
+        <div class="report-banner" [class.ok]="report.overall === 'VALID'" [class.bad]="report.overall === 'INVALID'">
+          <span class="report-verdict">{{ report.overall === 'VALID' ? '✓ PASSED' : '✗ FAILED' }}</span>
+          <span class="report-headline">{{ report.headline }}</span>
+          <button class="report-close" (click)="state.closeReport()">&times;</button>
+        </div>
+
+        <div class="report-body">
+          <div class="report-sub">{{ report.loadsheet }}</div>
+
+          @if (report.reasons.length) {
+            <div class="report-why">
+              <div class="report-why-title">Why it failed</div>
+              <ul>
+                @for (r of report.reasons; track r) { <li>{{ r }}</li> }
+              </ul>
+            </div>
+          }
+
+          @for (stage of report.stages; track stage.title) {
+            <div class="report-stage">
+              <div class="report-stage-head" [class.ok]="stage.ok" [class.bad]="!stage.ok">
+                <span>{{ stage.ok ? '✓' : '✗' }}</span> {{ stage.title }}
+              </div>
+              <div class="report-checks">
+                @for (c of stage.checks; track c.name) {
+                  <div class="report-check" [class.pass]="c.status === 'PASS'" [class.fail]="c.status === 'FAIL'" [class.warn]="c.status === 'WARN'">
+                    <span class="report-dot">{{ c.status === 'PASS' ? '✓' : c.status === 'FAIL' ? '✗' : '!' }}</span>
+                    <span class="report-check-name">{{ c.name }}</span>
+                    @if (c.detail) { <span class="report-check-detail">{{ c.detail }}</span> }
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+}

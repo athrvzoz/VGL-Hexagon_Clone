@@ -33,11 +33,12 @@
         <th style="width: 80px;">Target Date</th>
         <th style="width: 120px;">Creation Date</th>
         <th>Details</th>
+        <th style="width: 170px;">Bot Review</th>
       </tr>
     </thead>
     <tbody>
       @for (task of state.filteredTasks(); track task.id; let i = $index) {
-      <tr (click)="state.selectTask(task)" [class.selected]="state.selectedTask()?.id === task.id" [class.even]="i % 2 === 0">
+      <tr (click)="state.selectTask(task)" [class.selected]="state.selectedTask()?.id === task.id" [class.even]="i % 2 === 0" [attr.data-task-id]="task.id">
         <td><input type="checkbox" (click)="$event.stopPropagation()"></td>
         <td class="corr-no-cell">
           <span class="row-icons">
@@ -49,7 +50,11 @@
             </span>
             <span class="row-icon badge-icon" title="Open" (click)="$event.stopPropagation()">Q</span>
           </span>
-          {{ task.correspondenceNo }}
+          @if (task.comment) {
+            <span class="sticky-note-wrapper" [attr.data-comment]="task.comment">{{ task.correspondenceNo }}</span>
+          } @else {
+            {{ task.correspondenceNo }}
+          }
         </td>
 
         <td>{{ task.author }}</td>
@@ -65,6 +70,19 @@
         <td>{{ task.targetDate }}</td>
         <td>{{ task.creationDate }}</td>
         <td>{{ task.details }}</td>
+        <td class="bot-cell" (click)="$event.stopPropagation()">
+          @if (state.botStatus()[task.id]; as st) {
+            @if (st === 'reviewing') {
+              <span class="bot-chip reviewing"><span class="bot-spinner"></span> Bot reviewing…</span>
+            } @else if (st === 'pass') {
+              <span class="bot-chip pass">✓ Passed</span>
+              <button class="report-btn" (click)="state.openReport(task.id)">Report</button>
+            } @else {
+              <span class="bot-chip fail">✗ Failed</span>
+              <button class="report-btn" (click)="state.openReport(task.id)">Report</button>
+            }
+          }
+        </td>
       </tr>
       }
     </tbody>

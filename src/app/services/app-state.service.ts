@@ -1,5 +1,5 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
-import { ContractTask } from '../models/task.model';
+import { Injectable, signal, computed, inject, NgZone } from '@angular/core';
+import { ContractTask, BotStatus, ValidationReport } from '../models/task.model';
 import { TaskService } from './task.service';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -8,6 +8,49 @@ import { toSignal } from '@angular/core/rxjs-interop';
 })
 export class AppStateService {
   private taskService = inject(TaskService);
+  private zone = inject(NgZone);
+
+  constructor() {
+    // Expose a hook the headed automation bot drives via Playwright's
+    // page.evaluate(). Updates run inside the Angular zone so change detection
+    // refreshes the row chips and report modal.
+    (window as any).botApi = {
+      setStatus: (id: string, status: BotStatus) =>
+        this.zone.run(() => this.botSetStatus(id, status)),
+      setReport: (id: string, report: ValidationReport) =>
+        this.zone.run(() => this.botSetReport(id, report)),
+      closeReport: () => this.zone.run(() => this.closeReport()),
+      reset: () => this.zone.run(() => this.botReset()),
+    };
+  }
+
+  // --- Bot validation state ---
+  botStatus = signal<Record<string, BotStatus>>({});
+  botReports = signal<Record<string, ValidationReport>>({});
+  reportModalTaskId = signal<string | null>(null);
+
+  botSetStatus(id: string, status: BotStatus) {
+    this.botStatus.update(m => ({ ...m, [id]: status }));
+  }
+
+  botSetReport(id: string, report: ValidationReport) {
+    this.botReports.update(m => ({ ...m, [id]: report }));
+    this.botSetStatus(id, report.overall === 'VALID' ? 'pass' : 'fail');
+  }
+
+  botReset() {
+    this.botStatus.set({});
+    this.botReports.set({});
+    this.reportModalTaskId.set(null);
+  }
+
+  openReport(id: string) {
+    this.reportModalTaskId.set(id);
+  }
+
+  closeReport() {
+    this.reportModalTaskId.set(null);
+  }
 
   // Core State
   activeView = signal<'All' | 'MyTasks' | 'Submitted' | 'Closed' | 'Overdue'>('All');
@@ -20,6 +63,13 @@ export class AppStateService {
   isBottomPanelOpen = signal(false);
   isTransmittalModalOpen = signal(false);
 
+  // Notification State
+  globalToast = signal<{ message: string, type: 'info' | 'success' | 'error' } | null>(null);
+
+  // Comment Modal State
+  isCommentModalOpen = signal(false);
+  commentTargetTaskId = signal<string | null>(null);
+  commentText = signal<string>('');
   // Tab States
   sidePanelTab = signal<'TASK' | 'SUBMITTAL' | 'FILES'>('TASK');
   bottomPanelTab = signal<'DETAILS' | 'STRUCTURE' | 'HISTORY' | 'CONTRACT'>('DETAILS');
@@ -71,7 +121,7 @@ export class AppStateService {
     const pClosed = (this.closedCount() / total) * 100;
     const pOverdue = (this.overdueCount() / total) * 100;
     const pUnclaimed = (this.unclaimedCount() / total) * 100;
-    
+
     // Segments: Claimed (#003366), Submitted (#fbbc04), Closed (#4caf50), Overdue (#d93025), Inbox (#ddd)
     return `conic-gradient(
       #003366 0% ${pClaimed}%, 
@@ -134,32 +184,59 @@ export class AppStateService {
         this.taskService.addTask(newTask);
 
         this.isTransmittalModalOpen.set(false);
-        alert('Transmittal finalized. Original task updated and follow-up task created.');
+        // Instead of alert, open comment pop up targeting the original task
+        this.commentTargetTaskId.set(task.id);
+        this.isCommentModalOpen.set(true);
       }
     }
+  }
+
+  submitComment() {
+    const targetId = this.commentTargetTaskId();
+    if (targetId) {
+      this.taskService.updateTask(targetId, { comment: this.commentText() });
+      this.showToast('Comment added and attached as sticky note', 'success');
+      const currentSelected = this.selectedTask();
+      if (currentSelected && currentSelected.id === targetId) {
+        this.selectedTask.set({ ...currentSelected, comment: this.commentText() });
+      }
+    }
+    this.cancelComment();
+  }
+
+  cancelComment() {
+    this.isCommentModalOpen.set(false);
+    this.commentText.set('');
+    this.commentTargetTaskId.set(null);
+  }
+
+  showToast(message: string, type: 'info' | 'success' | 'error' = 'info') {
+    this.globalToast.set({ message, type });
+    setTimeout(() => this.globalToast.set(null), 3000);
   }
 
   approveTask() {
     const task = this.selectedTask();
     if (task) {
-      alert(`Task ${task.id} approved successfully!`);
+      this.showToast(`Task ${task.id} approved successfully!`, 'success');
     }
   }
 
   declineTask() {
     const task = this.selectedTask();
     if (task) {
-      alert(`Task ${task.id} has been declined.`);
+      this.showToast(`Task ${task.id} has been declined.`, 'info');
     }
   }
 
-  downloadAttachment() {
+  downloadAttachment(filename?: string) {
     const task = this.selectedTask();
     if (task) {
-      const pdfUrl = 'https://raw.githubusercontent.com/athrvzoz/LocatorFile/refs/heads/main/CEP210090ER.pdf';
+      // Serve the real PDF that was uploaded into the app (public/files/).
+      const file = filename || task.attachments?.[0] || `${task.correspondenceNo}.pdf`;
       const link = document.createElement('a');
-      link.href = pdfUrl;
-      link.download = 'CEP210090ER.pdf';
+      link.href = `/files/${encodeURIComponent(file)}`;
+      link.download = file;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -182,7 +259,11 @@ export class AppStateService {
   exportData() {
     const task = this.selectedTask();
     if (task && task.project === 'C2 PROJECT') {
-      const csvUrl = 'https://raw.githubusercontent.com/athrvzoz/LocatorFile/refs/heads/main/Sample%20Loadsheet(C2)%20(2).csv';
+      // Export the loadsheet wired to this task: the matching ("pass") loadsheet
+      // mirrors the PDF metadata; the "fake" loadsheet is deliberately mismatched
+      // so the validation script fails on it.
+      const variant = task.loadsheetVariant === 'fake' ? 'fake' : 'pass';
+      const csvUrl = `/loadsheets/loadsheet_${variant}.csv`;
       fetch(csvUrl)
         .then(response => response.blob())
         .then(blob => {
@@ -199,7 +280,7 @@ export class AppStateService {
           console.error('Download failed:', error);
         });
     } else if (task) {
-      alert('Export data is only available for C2 PROJECT tasks.');
+      this.showToast('Export data is only available for C2 PROJECT tasks.', 'error');
     }
   }
 
