@@ -1,5 +1,5 @@
 import { Injectable, signal, computed, inject, NgZone } from '@angular/core';
-import { ContractTask, BotStatus, ValidationReport } from '../models/task.model';
+import { ContractTask, BotStatus, ValidationReport, BotStage } from '../models/task.model';
 import { TaskService } from './task.service';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -44,12 +44,80 @@ export class AppStateService {
     this.reportModalTaskId.set(null);
   }
 
+  // Report modal interactivity
+  reportFilter = signal<'all' | 'issues'>('all');
+  collapsedStages = signal<Set<string>>(new Set());
+
+  currentReport = computed(() => {
+    const id = this.reportModalTaskId();
+    return id ? this.botReports()[id] ?? null : null;
+  });
+
+  reportCounts = computed(() => {
+    const r = this.currentReport();
+    let pass = 0, fail = 0, warn = 0;
+    if (r) {
+      for (const s of r.stages) {
+        for (const c of s.checks) {
+          if (c.status === 'PASS') pass++;
+          else if (c.status === 'FAIL') fail++;
+          else warn++;
+        }
+      }
+    }
+    return { pass, fail, warn };
+  });
+
   openReport(id: string) {
     this.reportModalTaskId.set(id);
+    this.reportFilter.set('all');
+    // Collapse fully-clean stages by default; keep stages with issues expanded.
+    const r = this.botReports()[id];
+    const collapsed = new Set<string>();
+    if (r) {
+      for (const s of r.stages) {
+        if (s.checks.every(c => c.status === 'PASS')) collapsed.add(s.title);
+      }
+    }
+    this.collapsedStages.set(collapsed);
   }
 
   closeReport() {
     this.reportModalTaskId.set(null);
+  }
+
+  toggleStage(title: string) {
+    const s = new Set(this.collapsedStages());
+    if (s.has(title)) s.delete(title); else s.add(title);
+    this.collapsedStages.set(s);
+  }
+
+  isStageCollapsed(title: string): boolean {
+    return this.collapsedStages().has(title);
+  }
+
+  setReportFilter(f: 'all' | 'issues') {
+    this.reportFilter.set(f);
+  }
+
+  stageVisibleChecks(stage: BotStage) {
+    return this.reportFilter() === 'issues'
+      ? stage.checks.filter(c => c.status !== 'PASS')
+      : stage.checks;
+  }
+
+  downloadReport() {
+    const r = this.currentReport();
+    if (!r) return;
+    const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `validation_report_${r.overall}_${r.loadsheet.replace(/[^a-z0-9]+/gi, '_')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   // Core State

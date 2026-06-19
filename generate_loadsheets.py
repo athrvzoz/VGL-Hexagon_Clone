@@ -80,6 +80,53 @@ def clean(v) -> str:
     return str(v).strip() if v else "NA"
 
 
+def make_defective(doc_no: str, out_path: str) -> dict:
+    """Build a deliberately erroneous PDF used by the FAKE transmittal. Its title
+    block shows WRONG values (so it mismatches the correct loadsheet, and the
+    validator can highlight the offending value in the document), and it also
+    FAILS the document-quality checks:
+      page 1 - a tampered title block (wrong doc number / title / rev / date / purpose),
+               plus overlapping blocks and a line running off the page edge,
+      page 2 - an image-only page (no text layer -> not searchable / not OCR'd),
+      page 3 - a completely blank page.
+    Returns the wrong values it printed (handy for the demo)."""
+    W, H = 595, 842  # A4 points
+    wrong = {
+        "Document Number": f"{doc_no}-9999",
+        "Title": "WRONG TITLE BLOCK - DOES NOT MATCH LOADSHEET",
+        "Revision": "9",
+        "Issue Date": "01-Jan-2099",
+        "Issue Purpose": "Issued for Demolition",
+    }
+    d = fitz.open()
+
+    p = d.new_page(width=W, height=H)
+    p.insert_text((60, 64), "TITLE BLOCK (ERRONEOUS - QA DEMO)", fontsize=12)
+    y = 110
+    for label in ("Document Number", "Title", "Revision", "Issue Date", "Issue Purpose"):
+        p.insert_text((60, y), f"{label}:  {wrong[label]}", fontsize=14)
+        y += 40
+    # overlapping blocks + a line running off the right edge (alignment defects)
+    p.insert_textbox(fitz.Rect(60, 360, 430, 410), "OVERLAPPING TEXT BLOCK AAAAAAAAAA", fontsize=22)
+    p.insert_textbox(fitz.Rect(66, 368, 436, 418), "OVERLAPPING TEXT BLOCK BBBBBBBBBB", fontsize=22, rotate=90)
+    p.insert_text((470, 835), "THIS-LINE-RUNS-OFF-THE-RIGHT-PAGE-EDGE-AND-IS-MISALIGNED", fontsize=12)
+
+    tmp = fitz.open()
+    tp = tmp.new_page(width=W, height=H)
+    tp.insert_textbox(fitz.Rect(60, 80, 540, 320),
+                      "THIS PAGE IS A SCANNED IMAGE.\nIT HAS NO TEXT LAYER - NOT SEARCHABLE AND NOT OCR'd.",
+                      fontsize=18)
+    pix = tp.get_pixmap(dpi=120)
+    tmp.close()
+    d.new_page(width=W, height=H).insert_image(fitz.Rect(0, 0, W, H), pixmap=pix)
+
+    d.new_page(width=W, height=H)  # blank page
+
+    d.save(out_path)
+    d.close()
+    return wrong
+
+
 def main():
     os.makedirs(FILES_OUT, exist_ok=True)
     os.makedirs(LOAD_OUT, exist_ok=True)
@@ -118,20 +165,22 @@ def main():
 
         shutil.copyfile(src_path, os.path.join(FILES_OUT, safe_name))
 
-        # PASS row - real, verified content.
-        pass_rows.append([
-            "C", doc_no, rev, date, title, "Confidential", "NA", "NA",
-            purpose, safe_name, "Company Use", "NA", "NA", "NA", author, producer,
-        ])
+        # The FAKE transmittal points at an erroneous copy whose title block shows
+        # WRONG values - so the (correct) loadsheet no longer matches the document.
+        def_name = safe_name[:-4] + "_DEFECTIVE.pdf"
+        make_defective(doc_no, os.path.join(FILES_OUT, def_name))
 
-        # FAKE row - same documents, fabricated title-block fields + metadata.
-        fake_rows.append([
-            "C", doc_no, str(int(rev) + 9) if rev.isdigit() else "9", "01/01/2099",
-            "Fabricated Title - Does Not Match PDF", "Confidential", "NA", "NA",
-            "Issued for Demolition", safe_name, "Company Use", "NA", "NA", "NA",
-            "WRONG.Author", "Fake Producer Library 1.0",
-        ])
-        print(f"[ok] {doc_no:<34} title={title!r} rev={rev} date={date} purpose={purpose!r}")
+        row_common = ["C", doc_no, rev, date, title, "Confidential", "NA", "NA",
+                      purpose, None, "Company Use", "NA", "NA", "NA", author, producer]
+
+        # PASS row - correct content + the good PDF.
+        pass_rows.append([*row_common[:9], safe_name, *row_common[10:]])
+
+        # FAKE row - SAME correct content, but pointing at the erroneous PDF. The
+        # document's title block contradicts every field, so validation fails and
+        # the report highlights the offending value in the document.
+        fake_rows.append([*row_common[:9], def_name, *row_common[10:]])
+        print(f"[ok] {doc_no:<34} good={safe_name}  errored={def_name}")
 
     for name, rows in (("loadsheet_pass.csv", pass_rows), ("loadsheet_fake.csv", fake_rows)):
         out = os.path.join(LOAD_OUT, name)

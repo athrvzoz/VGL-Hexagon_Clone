@@ -76,6 +76,7 @@ class Check:
     name: str
     status: str
     detail: str = ""
+    snippet: str = ""  # data-URL PNG: cropped+highlighted region of the PDF
 
 
 @dataclass
@@ -83,8 +84,8 @@ class Result:
     title: str
     checks: list[Check] = field(default_factory=list)
 
-    def add(self, name: str, status: str, detail: str = "") -> None:
-        self.checks.append(Check(name, status, detail))
+    def add(self, name: str, status: str, detail: str = "", snippet: str = "") -> None:
+        self.checks.append(Check(name, status, detail, snippet))
 
     @property
     def ok(self) -> bool:
@@ -143,6 +144,38 @@ def find_special_chars(text: str) -> list[str]:
         label = repr(ch) if ch.isprintable() else f"U+{ord(ch):04X} ({unicodedata.name(ch, cat)})"
         bad.append(label)
     return sorted(set(bad))
+
+
+def crop_highlight(doc, needle: str, status: str) -> str:
+    """Locate `needle` in the document, box it (green if PASS, red otherwise) and
+    return a cropped PNG data-URL of that region as visual evidence. Returns ''
+    if the value can't be located or isn't applicable."""
+    n = (needle or "").strip()
+    if not n or n.upper() in ("NA", "(NONE FOUND)", "NONE", "(NONE)"):
+        return ""
+    color = (0.12, 0.56, 0.24) if status == "PASS" else (0.85, 0.16, 0.13)
+    variants = [n, n.upper(), n.lower(), n.title()]
+    if len(n) > 45:
+        variants.append(n[:45])
+    for pno in range(doc.page_count):
+        page = doc[pno]
+        rects = []
+        for v in variants:
+            try:
+                rects = page.search_for(v)
+            except Exception:
+                rects = []
+            if rects:
+                break
+        if not rects:
+            continue
+        for rr in rects[:4]:
+            page.draw_rect(rr, color=color, width=1.6)
+        r = rects[0]
+        clip = fitz.Rect(r.x0 - 48, r.y0 - 30, r.x1 + 48, r.y1 + 30) & page.rect
+        pix = page.get_pixmap(clip=clip, dpi=160)
+        return "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
+    return ""
 
 
 def rects_overlap(a, b, min_frac: float = 0.25) -> bool:
@@ -302,8 +335,10 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             f"loadsheet={fname!r} actual={actual!r}")
     in_text = doc_no and doc_no.lower() in full_text.lower()
     in_name = doc_no and doc_no.lower() in actual.lower()
+    docno_snip = crop_highlight(doc, doc_no, "PASS") if in_text else ""
     res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
-            f"{doc_no!r} found in {'document text' if in_text else 'file name' if in_name else 'NEITHER text nor name'}")
+            f"{doc_no!r} found in {'document text' if in_text else 'file name' if in_name else 'NEITHER text nor name'}",
+            docno_snip)
 
     # --- content consistency: loadsheet vs the document's title-block text ---
     # The PDF's file metadata is unreliable (e.g. /Title is often empty), so
@@ -315,16 +350,17 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     if not llm_active:
         hay = norm_text(full_text)
 
-        def content_check(label: str, value: str, kind: str = "text") -> None:
+        def content_check(label: str, value: str, kind: str = "text", snippet: bool = False) -> None:
             if norm(value) == "":
                 res.add(label, PASS, "not asserted (NA)")
                 return
             ok = date_in_text(value.strip(), hay) if kind == "date" else norm_text(value) in hay
+            snip = crop_highlight(doc, value.strip(), "PASS") if (ok and snippet) else ""
             res.add(label, PASS if ok else FAIL,
-                    f"loadsheet {value.strip()!r} {'found in' if ok else 'NOT found in'} document")
+                    f"loadsheet {value.strip()!r} {'found in' if ok else 'NOT found in'} document", snip)
 
-        content_check("Title matches document", row.get("Title", ""))
-        content_check("Issue Purpose matches document", row.get("Issue Purpose", ""))
+        content_check("Title matches document", row.get("Title", ""), snippet=True)
+        content_check("Issue Purpose matches document", row.get("Issue Purpose", ""), snippet=True)
         content_check("Issue Date matches document", row.get("Issue Date", row.get("Issue Date ", "")), kind="date")
 
         # Revision: confirm against revision evidence (filename + rev tables in the text).
@@ -448,7 +484,6 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
         meta_str = "\n".join(f"  {label}: {meta.get(key) or '(none)'}"
                              for label, key in (("Author", "author"), ("Producer", "producer"),
                                                  ("Creator", "creator"), ("Title", "title")))
-        doc.close()
 
         sheet = "\n".join(f"  {k.strip()}: {v.strip()}" for k, v in row.items() if v.strip())
         content = [{"type": "text",
@@ -467,11 +502,21 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
                 {"role": "user", "content": content},
             ],
         )
+        # Fields whose value can be located and cropped from the document as evidence.
+        snippet_fields = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
+                          "Issue Date (LLM)", "Diagram Number (LLM)", "Contract Number (LLM)"}
         text = resp.choices[0].message.content
         for c in json.loads(text).get("checks", []):
+            name = c.get("name", "check")
+            status = c.get("status", WARN)
             lv, dv, ev = c.get("loadsheet_value", ""), c.get("document_value", ""), c.get("evidence", "")
             detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
-            res.add(c.get("name", "check"), c.get("status", WARN), detail[:300])
+            snip = ""
+            if name in snippet_fields:
+                needle = dv if dv and dv.strip().upper() not in ("(NONE FOUND)", "NA", "NONE", "") else lv
+                snip = crop_highlight(doc, needle, status)
+            res.add(name, status, detail[:300], snip)
+        doc.close()
     except Exception as e:
         # Fail closed: when the LLM is the authoritative content reviewer, an
         # incomplete review must not pass silently (deterministic content checks
@@ -517,7 +562,8 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
     stages = [{
         "title": r.title,
         "ok": r.ok,
-        "checks": [{"name": c.name, "status": c.status, "detail": c.detail} for c in r.checks],
+        "checks": [{"name": c.name, "status": c.status, "detail": c.detail, "snippet": c.snippet}
+                   for c in r.checks],
     } for r in results]
 
     grouped: "OrderedDict[str, list[str]]" = OrderedDict()

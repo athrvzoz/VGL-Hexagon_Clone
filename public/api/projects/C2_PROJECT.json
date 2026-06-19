@@ -31,12 +31,12 @@
     "id": "C2-1002",
     "Correspondence number": "CP-DMG-VGL-ZEN-TRN-01001-26-FAKE",
     "Step Name": "Review Submittal...",
-    "Submittal Description": "Transmittal CP-DMG-VGL-ZEN-TRN-01001-26 - Fake Loadsheet (metadata mismatch)",
+    "Submittal Description": "Transmittal CP-DMG-VGL-ZEN-TRN-01001-26 - Errored Documents (do not match loadsheet)",
     "Reason for Issue": "IFU",
     "Submittal Type": "Technical",
     "Target Date": "6/9/2026",
     "Creation Date": "3/24/2026 14:00:00",
-    "Details": "Loadsheet metadata does NOT match the attached PDFs - validation fails.",
+    "Details": "The attached PDFs have wrong title blocks and quality defects - validation fails and the report highlights each mismatch.",
     "Project": "C2 PROJECT",
     "Is Claimed": false,
     "Status": "All",
@@ -47,12 +47,12 @@
     "Claimed By": "",
     "Loadsheet Variant": "fake",
     "Attachments": [
-      "CP-039000-ICS-LOP-KIE-00013-001.pdf",
-      "CP-139000-ICS-DAS-01821-00086.pdf",
-      "CP-139000-ICS-DAS-KIE-00001.pdf",
-      "CP-139000-ICS-DIA-01821-00086-001.pdf",
-      "VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf",
-      "VG-000000-INF-SPC-VGL-00003.pdf"
+      "CP-039000-ICS-LOP-KIE-00013-001_DEFECTIVE.pdf",
+      "CP-139000-ICS-DAS-01821-00086_DEFECTIVE.pdf",
+      "CP-139000-ICS-DAS-KIE-00001_DEFECTIVE.pdf",
+      "CP-139000-ICS-DIA-01821-00086-001_DEFECTIVE.pdf",
+      "VG-000000-DMG-PCD-VGL-00001_Rev_4_DEFECTIVE.pdf",
+      "VG-000000-INF-SPC-VGL-00003_DEFECTIVE.pdf"
     ]
   },
   {

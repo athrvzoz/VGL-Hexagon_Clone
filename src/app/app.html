@@ -71,7 +71,21 @@
         <div class="report-banner" [class.ok]="report.overall === 'VALID'" [class.bad]="report.overall === 'INVALID'">
           <span class="report-verdict">{{ report.overall === 'VALID' ? '✓ PASSED' : '✗ FAILED' }}</span>
           <span class="report-headline">{{ report.headline }}</span>
+          <button class="report-dl" (click)="state.downloadReport()" title="Download report (JSON)">⤓ Download</button>
           <button class="report-close" (click)="state.closeReport()">&times;</button>
+        </div>
+
+        <!-- toolbar: count chips + filter -->
+        <div class="report-toolbar">
+          <div class="report-counts">
+            <span class="rc rc-pass">✓ {{ state.reportCounts().pass }} passed</span>
+            <span class="rc rc-fail">✗ {{ state.reportCounts().fail }} failed</span>
+            <span class="rc rc-warn">! {{ state.reportCounts().warn }} warnings</span>
+          </div>
+          <div class="report-filter">
+            <button [class.active]="state.reportFilter() === 'all'" (click)="state.setReportFilter('all')">All checks</button>
+            <button [class.active]="state.reportFilter() === 'issues'" (click)="state.setReportFilter('issues')">Only issues</button>
+          </div>
         </div>
 
         <div class="report-body">
@@ -87,20 +101,36 @@
           }
 
           @for (stage of report.stages; track stage.title) {
-            <div class="report-stage">
-              <div class="report-stage-head" [class.ok]="stage.ok" [class.bad]="!stage.ok">
-                <span>{{ stage.ok ? '✓' : '✗' }}</span> {{ stage.title }}
-              </div>
-              <div class="report-checks">
-                @for (c of stage.checks; track c.name) {
-                  <div class="report-check" [class.pass]="c.status === 'PASS'" [class.fail]="c.status === 'FAIL'" [class.warn]="c.status === 'WARN'">
-                    <span class="report-dot">{{ c.status === 'PASS' ? '✓' : c.status === 'FAIL' ? '✗' : '!' }}</span>
-                    <span class="report-check-name">{{ c.name }}</span>
-                    @if (c.detail) { <span class="report-check-detail">{{ c.detail }}</span> }
+            @if (state.reportFilter() === 'all' || state.stageVisibleChecks(stage).length) {
+              <div class="report-stage">
+                <div class="report-stage-head" [class.ok]="stage.ok" [class.bad]="!stage.ok"
+                     (click)="state.toggleStage(stage.title)">
+                  <span class="report-chevron">{{ state.isStageCollapsed(stage.title) ? '▸' : '▾' }}</span>
+                  <span class="report-stage-icon">{{ stage.ok ? '✓' : '✗' }}</span>
+                  <span class="report-stage-title">{{ stage.title }}</span>
+                  <span class="report-stage-tag">{{ stage.checks.length }} checks</span>
+                </div>
+                @if (!state.isStageCollapsed(stage.title)) {
+                  <div class="report-checks">
+                    @for (c of state.stageVisibleChecks(stage); track c.name) {
+                      <div class="report-check" [class.pass]="c.status === 'PASS'" [class.fail]="c.status === 'FAIL'" [class.warn]="c.status === 'WARN'">
+                        <div class="report-check-row">
+                          <span class="report-dot">{{ c.status === 'PASS' ? '✓' : c.status === 'FAIL' ? '✗' : '!' }}</span>
+                          <span class="report-check-name">{{ c.name }}</span>
+                          @if (c.detail) { <span class="report-check-detail">{{ c.detail }}</span> }
+                        </div>
+                        @if (c.snippet) {
+                          <figure class="report-evidence">
+                            <img [src]="c.snippet" alt="evidence from document" />
+                            <figcaption>{{ c.status === 'PASS' ? 'Found in document (highlighted)' : 'Document shows this (highlighted) — does not match loadsheet' }}</figcaption>
+                          </figure>
+                        }
+                      </div>
+                    }
                   </div>
                 }
               </div>
-            </div>
+            }
           }
         </div>
       </div>

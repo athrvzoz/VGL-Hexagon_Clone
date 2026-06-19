@@ -45,3 +45,4 @@ Thumbs.db
 
 # doc-validator local secrets
 doc-validator/.env
+doc-validator/reports/

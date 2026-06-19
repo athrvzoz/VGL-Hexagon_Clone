@@ -49,6 +49,7 @@ export interface BotCheck {
   name: string;
   status: 'PASS' | 'FAIL' | 'WARN';
   detail: string;
+  snippet?: string;  // data-URL PNG: cropped + highlighted region of the PDF
 }
 
 export interface BotStage {
