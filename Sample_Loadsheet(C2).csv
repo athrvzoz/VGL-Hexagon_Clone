@@ -1,3 +1,7 @@
-﻿Action,Document Number,Revision,Issue Date ,Document Title,Classification,Alternate Document number ,Alternate Revision number ,Issue Purpose,File Name,Security Code ,Supplier Number,Purchase Order number,Supervised by 
-C,CEP210090ER,1,15/03/2026,Technical Design Specification for Offshore Platform,Confidential,NA,NA,IFU,CEP210090ER.pdf,Company Use,NA,NA,NA
-C,CEP210090ER,1,15/03/2026,Technical Design Specification for Offshore Platform,Confidential,NA,NA,IFU,CEP210090ER.pdf,Company Use,NA,NA,NA
+Action,Document Number,Revision,Issue Date ,Title,Classification,Alternate Document number ,Alternate Revision number ,Issue Purpose,File Name,Security Code ,Supplier Number,Purchase Order number,Supervised by,Author,Producer
+C,CP-039000-ICS-LOP-KIE-00013-001,0,9/3/2021,Instrument Loop Diagram,Confidential,NA,NA,Issued for Construction,CP-039000-ICS-LOP-KIE-00013-001.pdf,Company Use,NA,NA,NA,Brian.Emra,GPL Ghostscript 8.15
+C,CP-139000-ICS-DAS-01821-00086,0,29/09/2020,Control Valve Data Sheet,Confidential,NA,NA,Issued for Review,CP-139000-ICS-DAS-01821-00086.pdf,Company Use,NA,NA,NA,BUILTIN\Administrators,Aquaforest OCR SDK 2.30.2008.17
+C,CP-139000-ICS-DAS-KIE-00001,1,14/09/2020,Control Valves Datasheets,Confidential,NA,NA,Issued for Purchase,CP-139000-ICS-DAS-KIE-00001.pdf,Company Use,NA,NA,NA,Mary.Moreno,Bluebeam PDF Library 19
+C,CP-139000-ICS-DIA-01821-00086-001,1,25/09/2020,NA,Confidential,NA,NA,Issued for Approval,CP-139000-ICS-DIA-01821-00086-001.pdf,Company Use,NA,NA,NA,BUILTIN\Administrators,Aquaforest OCR SDK 2.30.2008.17
+C,VG-000000-DMG-PCD-VGL-00001,4,1/4/2026,Document Numbering Procedure,Confidential,NA,NA,Issued for Use,VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf,Company Use,NA,NA,NA,NA,NA
+C,VG-000000-INF-SPC-VGL-00003,4,8/12/2023,Information Exchange Requirements Specification,Confidential,NA,NA,Issued for Use,VG-000000-INF-SPC-VGL-00003.pdf,Company Use,NA,NA,NA,NA,NA

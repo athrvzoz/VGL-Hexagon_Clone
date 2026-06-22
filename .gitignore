@@ -46,3 +46,7 @@ Thumbs.db
 # doc-validator local secrets
 doc-validator/.env
 doc-validator/reports/
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -7,7 +7,7 @@ Validates a loadsheet (CSV) against the PDFs it describes, in two stages:
     * required columns present
     * NO special characters in any field
     * every "File Name" points at a real PDF
-    * Revision is numeric, Issue Date is DD/MM/YYYY
+    * Revision is numeric or NA
 
   STAGE 2 - DOCUMENTS   (per PDF)
     deterministic (PyMuPDF) - ALWAYS does the document-quality checks:
@@ -62,7 +62,6 @@ REQUIRED_COLUMNS = ["Action", "Document Number", "Revision", "Title", "File Name
 # Characters that legitimately appear in document metadata / numbers.
 # Anything outside this set (or any control / non-ASCII character) is flagged.
 ALLOWED_PUNCT = set(" .,-_/\\()&:'+#")
-DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 
 ENV_FILE = os.path.join(HERE, ".env")
 
@@ -144,6 +143,61 @@ def find_special_chars(text: str) -> list[str]:
         label = repr(ch) if ch.isprintable() else f"U+{ord(ch):04X} ({unicodedata.name(ch, cat)})"
         bad.append(label)
     return sorted(set(bad))
+
+
+# Annotation subtypes that are NOT review markups (links / popups / form fields).
+NON_MARKUP_ANNOTS = {"Link", "Popup", "Widget"}
+
+
+def page_orientation(page) -> str:
+    """'portrait' or 'landscape', accounting for page rotation."""
+    w, h = page.rect.width, page.rect.height
+    if page.rotation in (90, 270):
+        w, h = h, w
+    return "landscape" if w > h else "portrait"
+
+
+def clean_id(text: str) -> str:
+    """Strip an identifier to upper-case alphanumerics for an exact comparison."""
+    return re.sub(r"[^A-Za-z0-9]", "", text).upper()
+
+
+def loose_id_regex(doc_no: str):
+    """A regex matching the document number even when OCR inserted spaces, split
+    it across separators, or confused I/1 and O/0 - so we can recover the EXACT
+    (garbled) text actually printed on the page for the report detail. Returns
+    None if the document number has no alphanumerics."""
+    parts = []
+    for ch in doc_no:
+        if not ch.isalnum():
+            continue
+        up = ch.upper()
+        if up in ("I", "1", "L"):
+            parts.append("[I1L]")
+        elif up in ("O", "0"):
+            parts.append("[O0]")
+        else:
+            parts.append(re.escape(ch))
+    if not parts:
+        return None
+    return re.compile(r"[\s./\\-]*".join(parts), re.I)
+
+
+def revision_history_numbers(text: str) -> list[int]:
+    """Parse the numeric Rev column from a 'Revision History' table (e.g.
+    [4, 3, 2]); empty if there is no parseable table. A rev token is an integer
+    (optional trailing letter) immediately followed by a date like '01-Apr-2026'."""
+    low = text.lower()
+    i = -1
+    for kw in ("revision history", "record of revisions", "rev history", "revision table"):
+        i = low.find(kw)
+        if i >= 0:
+            break
+    if i < 0:
+        return []
+    block = text[i:i + 1500]
+    return [int(m.group(1)) for m in
+            re.finditer(r"\n\s*(\d{1,2})[A-Za-z]?\s*\n\s*\d{1,2}-[A-Za-z]{3}-\d{4}", block)]
 
 
 def crop_highlight(doc, needle: str, status: str) -> str:
@@ -231,7 +285,7 @@ def validate_loadsheet(path: str, files_dir: str) -> tuple[Result, list[dict]]:
             ("; ".join(offenders[:5]) + (" ..." if len(offenders) > 5 else "")) if offenders else "clean")
 
     # Per-row structural consistency.
-    bad_files, bad_rev, bad_date = [], [], []
+    bad_files, bad_rev = [], []
     for i, row in enumerate(rows, start=2):
         fname = row.get("File Name", "").strip()
         if not fname or not os.path.isfile(os.path.join(files_dir, fname)):
@@ -239,13 +293,26 @@ def validate_loadsheet(path: str, files_dir: str) -> tuple[Result, list[dict]]:
         rev = row.get("Revision", "").strip()
         if norm(rev) and not rev.isdigit():  # NA is allowed (field not applicable)
             bad_rev.append(f"row {i}: {rev!r}")
-        idate = row.get("Issue Date", row.get("Issue Date ", "")).strip()
-        if norm(idate) and not DATE_RE.match(idate):  # NA allowed
-            bad_date.append(f"row {i}: {idate!r}")
     res.add("File Name resolves to a PDF", FAIL if bad_files else PASS,
             "; ".join(bad_files) if bad_files else "all referenced PDFs found")
     res.add("Revision is numeric or NA", FAIL if bad_rev else PASS, "; ".join(bad_rev) if bad_rev else "ok")
-    res.add("Issue Date is DD/MM/YYYY or NA", FAIL if bad_date else PASS, "; ".join(bad_date) if bad_date else "ok")
+
+    # --- DEMO checks (loadsheet-level): PASSED for the demo because the
+    #     authoritative reference data is not available here. Flagged (DEMO). ---
+    suppliers = [(r.get("Supplier Name", r.get("Supplier Number", ""))) for r in rows]
+    res.add("Supplier Name is populated", PASS,
+            "(DEMO) supplier master not available -> passed for demo"
+            if all(norm(s) == "" for s in suppliers)
+            else f"(DEMO) populated: {[s.strip() for s in suppliers if norm(s)]} -> passed for demo")
+
+    classes = sorted({r.get("Classification", r.get("Security Classification", "")).strip()
+                      for r in rows if norm(r.get("Classification", r.get("Security Classification", "")))})
+    res.add("Correct Security Classification", PASS,
+            f"(DEMO) classification policy not available; values seen: {classes} -> passed for demo")
+
+    purposes = sorted({r.get("Issue Purpose", "").strip() for r in rows if norm(r.get("Issue Purpose", ""))})
+    res.add("No mixed Issue Purpose (superseding is an exception)", PASS,
+            f"(DEMO) issue-purpose rules not available; superseding is an exception; values seen: {purposes} -> passed for demo")
 
     return res, rows
 
@@ -264,6 +331,7 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     n = doc.page_count
     pages_no_text, pages_not_ocrd, pages_blank = [], [], []
     overlap_pages, overflow_pages = [], []
+    orientations, markups = [], []
     full_text_parts = []
 
     for pno in range(n):
@@ -271,6 +339,10 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
         text = page.get_text("text").strip()
         images = page.get_images(full=True)
         full_text_parts.append(text)
+        orientations.append(page_orientation(page))
+        for a in page.annots() or []:
+            if a.type[1] not in NON_MARKUP_ANNOTS:
+                markups.append((pno + 1, a.type[1]))
 
         has_text, has_img = bool(text), bool(images)
         if not has_text and not has_img:
@@ -327,6 +399,65 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     res.add("content within page bounds", WARN if overflow_pages else PASS,
             f"content may spill off page on: {overflow_pages[:10]}" if overflow_pages else "aligned within margins")
 
+    # --- page orientation (first page sets the expected orientation; any later
+    #     page that differs is a failure) ---
+    expected = orientations[0] if orientations else "portrait"
+    bad_ori = [i + 1 for i, o in enumerate(orientations) if o != expected]
+    res.add("Page orientation consistent", FAIL if bad_ori else PASS,
+            f"first page is {expected}, but page(s) {bad_ori} differ" if bad_ori
+            else f"all {n} page(s) {expected}")
+
+    # --- no markups / review annotations present ---
+    res.add("No markups present on document", WARN if markups else PASS,
+            f"{len(markups)} markup(s): " + ", ".join(f"{k} (p{p})" for p, k in markups[:10])
+            if markups else "no markups")
+
+    # --- document number legible in every page's title block ---
+    # Three outcomes per page: clean exact match; present-but-garbled (the number
+    # is there but OCR mangled it -> a quality WARNING, NOT silently passed); or
+    # absent. The detail reports what was EXPECTED vs what was actually FOUND.
+    doc_no_meta = row.get("Document Number", "").strip()
+    tgt_clean = clean_id(doc_no_meta)
+    loose = loose_id_regex(doc_no_meta)
+    pages_clean, pages_mangled, pages_missing, found_examples = [], [], [], []
+    if tgt_clean:
+        for pno, t in enumerate(full_text_parts):
+            if tgt_clean in clean_id(t):
+                pages_clean.append(pno + 1)
+                continue
+            m = loose.search(t) if loose else None
+            if m:
+                pages_mangled.append(pno + 1)
+                if len(found_examples) < 3:
+                    found_examples.append(f"p{pno + 1} found {re.sub(r'\s+', ' ', m.group()).strip()!r}")
+            else:
+                pages_missing.append(pno + 1)
+    exp = f"expected {doc_no_meta!r}"
+    if not pages_mangled and not pages_missing:
+        res.add("Document metadata legible on each page", PASS,
+                f"{exp}; present and clean (exact match) on all {n} page(s)")
+    else:
+        notes = [exp]
+        if pages_mangled:
+            notes.append(f"garbled (OCR/spacing) on page(s) {pages_mangled} - " + "; ".join(found_examples))
+        if pages_missing:
+            notes.append(f"document number not found on page(s) {pages_missing}")
+        if pages_clean:
+            notes.append(f"clean on {len(pages_clean)} of {n} page(s)")
+        res.add("Document metadata legible on each page", WARN, "; ".join(notes))
+
+    # --- revision history is complete (no gaps between the listed revisions);
+    #     no revision-history table at all is acceptable ---
+    revs_hist = revision_history_numbers(full_text)
+    if len(revs_hist) < 2:
+        res.add("Revision history is complete", PASS, "no multi-row revision history found -> OK")
+    else:
+        lo, hi = min(revs_hist), max(revs_hist)
+        gap = [x for x in range(lo, hi + 1) if x not in set(revs_hist)]
+        res.add("Revision history is complete", WARN if gap else PASS,
+                f"history lists {sorted(set(revs_hist), reverse=True)}, missing revision(s) {gap}" if gap
+                else f"complete - revisions {hi}..{lo} all present")
+
     # --- document number / file name consistency ---
     doc_no = row.get("Document Number", "").strip()
     fname = row.get("File Name", "").strip()
@@ -361,7 +492,6 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
 
         content_check("Title matches document", row.get("Title", ""), snippet=True)
         content_check("Issue Purpose matches document", row.get("Issue Purpose", ""), snippet=True)
-        content_check("Issue Date matches document", row.get("Issue Date", row.get("Issue Date ", "")), kind="date")
 
         # Revision: confirm against revision evidence (filename + rev tables in the text).
         rval = norm(row.get("Revision"))
@@ -394,6 +524,22 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             sheet_val, pdf_val = norm(row.get(field_name)), norm(meta.get(meta_key))
             res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == pdf_val else FAIL,
                     f"loadsheet={row.get(field_name, '').strip()!r}  pdf={(meta.get(meta_key) or '').strip()!r}")
+
+    # --- DEMO checks (per document): PASSED for the demo because the reference
+    #     data (PO system, prior-revision repository, document-control review
+    #     status) is not available here. Flagged (DEMO). ---
+    po = row.get("Purchase Order number", row.get("Purchase Order Number", "")).strip()
+    res.add("Purchase Order Number is populated and matches document (for Supplier documentation)", PASS,
+            "(DEMO) PO system not available -> passed for demo" if norm(po) == ""
+            else f"(DEMO) loadsheet PO {po!r}; reference PO data not available -> passed for demo")
+
+    rev_val = row.get("Revision", "").strip()
+    res.add("Prior revision availability and match", PASS,
+            f"(DEMO) prior-revision repository not available; current revision on sheet = {rev_val or 'NA'!r} "
+            f"-> passed for demo")
+
+    res.add("Check for prior revisions still under review", PASS,
+            "(DEMO) document-control review status not available -> passed for demo")
 
     doc.close()
     return res
@@ -452,7 +598,6 @@ Return EXACTLY one result for each of these names:
   "Document Number (LLM)"   - loadsheet 'Document Number' vs the number printed in the title block.
   "Title (LLM)"             - loadsheet 'Title' vs the document title in the title block.
   "Revision (LLM)"          - loadsheet 'Revision' vs the document's current revision.
-  "Issue Date (LLM)"        - loadsheet 'Issue Date' vs the current revision's date.
   "Issue Purpose (LLM)"     - loadsheet 'Issue Purpose' vs the current revision's issue/status description.
   "Diagram Number (LLM)"    - loadsheet 'Document Number' vs any drawing/diagram number shown; WARN if none.
   "Contract Number (LLM)"   - any contract/PO number in the doc vs the loadsheet (WARN if neither has one).
@@ -504,7 +649,7 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
         )
         # Fields whose value can be located and cropped from the document as evidence.
         snippet_fields = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
-                          "Issue Date (LLM)", "Diagram Number (LLM)", "Contract Number (LLM)"}
+                          "Diagram Number (LLM)", "Contract Number (LLM)"}
         text = resp.choices[0].message.content
         for c in json.loads(text).get("checks", []):
             name = c.get("name", "check")

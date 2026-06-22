@@ -74,7 +74,11 @@ export class AppStateService {
     // Collapse fully-clean stages by default; keep stages with issues expanded.
     const r = this.botReports()[id];
     const collapsed = new Set<string>();
-    if (r) {
+    // Auto-collapse fully-clean stages, but only when there are multiple stages —
+    // a single-stage report should open expanded so the checks are visible
+    // immediately. The loadsheet QA report (QA + DEMO stages) is also kept fully
+    // expanded so both sections are visible for the demo.
+    if (r && r.stages.length > 1 && id !== AppStateService.QA_REPORT_ID) {
       for (const s of r.stages) {
         if (s.checks.every(c => c.status === 'PASS')) collapsed.add(s.title);
       }
@@ -84,6 +88,28 @@ export class AppStateService {
 
   closeReport() {
     this.reportModalTaskId.set(null);
+  }
+
+  // Sentinel id used for the standalone Loadsheet QA report (not tied to a bot run).
+  static readonly QA_REPORT_ID = '__qa__';
+
+  // Open the loadsheet QA report (the same report produced by loadsheet_checks.py
+  // / public/qa_report.json) in the existing report popup. The modal's Download
+  // button then exports the very same report, so popup == download.
+  openQaReport() {
+    fetch('/qa_report.json', { cache: 'no-store' })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((report: ValidationReport) => {
+        this.botReports.update(m => ({ ...m, [AppStateService.QA_REPORT_ID]: report }));
+        this.openReport(AppStateService.QA_REPORT_ID);
+      })
+      .catch(err => {
+        console.error('Failed to load QA report', err);
+        this.showToast('Could not load QA report (run loadsheet_checks.py first).', 'error');
+      });
   }
 
   toggleStage(title: string) {

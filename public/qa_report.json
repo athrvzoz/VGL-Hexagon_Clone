@@ -1,0 +1,95 @@
+{
+  "loadsheet": "Sample_Loadsheet(C2).csv",
+  "overall": "VALID",
+  "headline": "15 loadsheet checks passed with 2 warning(s).",
+  "reasons": [],
+  "stages": [
+    {
+      "title": "LOADSHEET QA CHECKS",
+      "ok": true,
+      "checks": [
+        {
+          "name": "1. Check for spaces and special characters (~, /, \\, @, &, %, !, etc.) in Document Number",
+          "status": "PASS",
+          "detail": "clean: CP-039000-ICS-LOP-KIE-00013-001, CP-139000-ICS-DAS-01821-00086, CP-139000-ICS-DAS-KIE-00001, CP-139000-ICS-DIA-01821-00086-001, VG-000000-DMG-PCD-VGL-00001, VG-000000-INF-SPC-VGL-00003"
+        },
+        {
+          "name": "2. Check for spaces and special characters (~, /, \\, @, &, %, !, etc.) in File Name",
+          "status": "PASS",
+          "detail": "clean: CP-039000-ICS-LOP-KIE-00013-001.pdf, CP-139000-ICS-DAS-01821-00086.pdf, CP-139000-ICS-DAS-KIE-00001.pdf, CP-139000-ICS-DIA-01821-00086-001.pdf, VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf, VG-000000-INF-SPC-VGL-00003.pdf"
+        },
+        {
+          "name": "3. Confirm Document Number matches File Name",
+          "status": "PASS",
+          "detail": "document number == file name (minus extension) for all 6 rows"
+        },
+        {
+          "name": "4. No mixed document disciplines and doc types",
+          "status": "PASS",
+          "detail": "each row is a single discipline/doc-type (6 rows checked)"
+        },
+        {
+          "name": "5. Revision history / revision evidence present in the document",
+          "status": "PASS",
+          "detail": "CP-039000-ICS-LOP-KIE-00013-001.pdf: revision block / revision field present in title block; CP-139000-ICS-DAS-01821-00086.pdf: revision history table found ('revision history'); CP-139000-ICS-DAS-KIE-00001.pdf: revision block / revision number present in title block; CP-139000-ICS-DIA-01821-00086-001.pdf: revision block / revision number present in title block; VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf: revision history table found ('revision history'); VG-000000-INF-SPC-VGL-00003.pdf: revision history table found ('revision history')"
+        },
+        {
+          "name": "6. Revision history is complete (no missing revisions between those listed)",
+          "status": "PASS",
+          "detail": "CP-039000-ICS-LOP-KIE-00013-001.pdf: no multi-row revision history found -> OK; CP-139000-ICS-DAS-01821-00086.pdf: no multi-row revision history found -> OK; CP-139000-ICS-DAS-KIE-00001.pdf: no multi-row revision history found -> OK; CP-139000-ICS-DIA-01821-00086-001.pdf: no multi-row revision history found -> OK; VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf: complete - revisions 4..2 all present; VG-000000-INF-SPC-VGL-00003.pdf: complete - revisions 4..2 all present"
+        },
+        {
+          "name": "7. Document metadata (document number) present and legible on each page",
+          "status": "WARN",
+          "detail": "CP-039000-ICS-LOP-KIE-00013-001.pdf: document number present and clean on all 1 page(s); CP-139000-ICS-DAS-01821-00086.pdf: document number present but garbled (OCR/spacing) on page(s) [2] (of 2 page(s)); CP-139000-ICS-DAS-KIE-00001.pdf: document number present and clean on all 19 page(s); CP-139000-ICS-DIA-01821-00086-001.pdf: document number present but garbled (OCR/spacing) on page(s) [1] (of 1 page(s)); VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf: document number present and clean on all 32 page(s); VG-000000-INF-SPC-VGL-00003.pdf: document number present and clean on all 34 page(s)"
+        },
+        {
+          "name": "8. Page orientation consistent (all pages match the first page)",
+          "status": "PASS",
+          "detail": "CP-039000-ICS-LOP-KIE-00013-001.pdf: all 1 page(s) portrait; CP-139000-ICS-DAS-01821-00086.pdf: all 2 page(s) portrait; CP-139000-ICS-DAS-KIE-00001.pdf: all 19 page(s) portrait; CP-139000-ICS-DIA-01821-00086-001.pdf: all 1 page(s) landscape; VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf: all 32 page(s) portrait; VG-000000-INF-SPC-VGL-00003.pdf: all 34 page(s) portrait"
+        },
+        {
+          "name": "9. Confirm no markups are present on the document",
+          "status": "WARN",
+          "detail": "CP-039000-ICS-LOP-KIE-00013-001.pdf: no markups; CP-139000-ICS-DAS-01821-00086.pdf: no markups; CP-139000-ICS-DAS-KIE-00001.pdf: 1 markup(s) found: FreeText (p12); CP-139000-ICS-DIA-01821-00086-001.pdf: no markups; VG-000000-DMG-PCD-VGL-00001_Rev_4.pdf: no markups; VG-000000-INF-SPC-VGL-00003.pdf: no markups"
+        }
+      ]
+    },
+    {
+      "title": "DEMO CHECKS (passed for demo - reference data not available)",
+      "ok": true,
+      "checks": [
+        {
+          "name": "1. Supplier Name is populated",
+          "status": "PASS",
+          "detail": "(DEMO) reference supplier data not available -> passed for demo"
+        },
+        {
+          "name": "2. Purchase Order Number is populated and matches document (for Supplier documentation)",
+          "status": "PASS",
+          "detail": "(DEMO) reference PO data not available -> passed for demo"
+        },
+        {
+          "name": "3. Correct Security Classification",
+          "status": "PASS",
+          "detail": "(DEMO) reference classification policy not available; values seen: ['Confidential'] -> passed for demo"
+        },
+        {
+          "name": "4. No mixed Issue Purpose (superseding is an exception)",
+          "status": "PASS",
+          "detail": "(DEMO) reference issue-purpose rules not available; superseding is an exception; values seen: ['Issued for Approval', 'Issued for Construction', 'Issued for Purchase', 'Issued for Review', 'Issued for Use'] -> passed for demo"
+        },
+        {
+          "name": "5. Prior revision availability and match",
+          "status": "PASS",
+          "detail": "(DEMO) prior-revision repository not available; current revisions on sheet: {'CP-039000-ICS-LOP-KIE-00013-001': '0', 'CP-139000-ICS-DAS-01821-00086': '0', 'CP-139000-ICS-DAS-KIE-00001': '1', 'CP-139000-ICS-DIA-01821-00086-001': '1', 'VG-000000-DMG-PCD-VGL-00001': '4', 'VG-000000-INF-SPC-VGL-00003': '4'} -> passed for demo"
+        },
+        {
+          "name": "6. Check for prior revisions still under review",
+          "status": "PASS",
+          "detail": "(DEMO) document-control review status not available -> passed for demo"
+        }
+      ]
+    }
+  ]
+}
