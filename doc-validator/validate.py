@@ -320,7 +320,8 @@ def validate_loadsheet(path: str, files_dir: str) -> tuple[Result, list[dict]]:
 # ---------------------------------------------------------------------------
 # Stage 2 - documents (deterministic)
 # ---------------------------------------------------------------------------
-def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
+def check_pdf(pdf_path: str, row: dict, client=None, model: str = "",
+              model_lo: str = "", usage=None, cache=None) -> Result:
     res = Result(f"DOCUMENT   {os.path.basename(pdf_path)}")
     try:
         doc = fitz.open(pdf_path)
@@ -478,52 +479,66 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     # title-block comparisons far more precisely (reading the title block and
     # revision history visually), so the deterministic text-presence versions are
     # skipped here to avoid double-counting / conflicting verdicts.
-    if not llm_active:
-        hay = norm_text(full_text)
+    # --- content consistency: loadsheet vs the document (deterministic FIRST) ---
+    # The text layer resolves the easy cases for free; only the fields it cannot
+    # confirm are escalated to the LLM (a focused, cropped, cached call). This is
+    # what keeps token usage low: clean documents never hit the model.
+    hay = norm_text(full_text)
+    unresolved: list[tuple[str, str, str]] = []  # (check name, loadsheet value, note)
 
-        def content_check(label: str, value: str, kind: str = "text", snippet: bool = False) -> None:
-            if norm(value) == "":
-                res.add(label, PASS, "not asserted (NA)")
-                return
-            ok = date_in_text(value.strip(), hay) if kind == "date" else norm_text(value) in hay
-            snip = crop_highlight(doc, value.strip(), "PASS") if (ok and snippet) else ""
-            res.add(label, PASS if ok else FAIL,
-                    f"loadsheet {value.strip()!r} {'found in' if ok else 'NOT found in'} document", snip)
-
-        content_check("Title matches document", row.get("Title", ""), snippet=True)
-        content_check("Issue Purpose matches document", row.get("Issue Purpose", ""), snippet=True)
-
-        # Revision: confirm against revision evidence (filename + rev tables in the text).
-        rval = norm(row.get("Revision"))
-        if rval == "":
-            res.add("Revision matches document", PASS, "not asserted (NA)")
+    def text_field(label: str, value: str, note: str) -> None:
+        if norm(value) == "":
+            res.add(label, PASS, "not asserted (NA)")
+        elif norm_text(value) in hay:
+            res.add(label, PASS, f"loadsheet {value.strip()!r} found in document text",
+                    crop_highlight(doc, value.strip(), "PASS"))
         else:
-            revs: set[str] = set()
-            mfn = re.search(r"_rev[ _]?0*(\d+)", actual, re.I)
-            if mfn:
-                revs.add(str(int(mfn.group(1))))
-            for mm in re.finditer(r"rev(?:ision)?\.?\s*0*(\d+)", hay):
-                revs.add(str(int(mm.group(1))))
-            for mm in re.finditer(r"-\s*rev\s*0*(\d+)", hay):
-                revs.add(str(int(mm.group(1))))
-            for mm in re.finditer(r"\b0*(\d+)\s+\d{1,2}[-/](?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", hay):
-                revs.add(str(int(mm.group(1))))
-            revs = {r for r in revs if r.isdigit() and int(r) < 100}  # drop years/page-nos
-            rv = str(int(rval)) if rval.isdigit() else rval
-            if rv in revs:
-                res.add("Revision matches document", PASS, f"rev {rv} confirmed (doc revs {sorted(revs)})")
-            elif revs:
-                res.add("Revision matches document", FAIL, f"loadsheet rev {rv} not among document revs {sorted(revs)}")
-            else:
-                res.add("Revision matches document", WARN, f"rev {rv} - no revision evidence in document")
+            unresolved.append((label, value.strip(), note))
 
-        # --- file-level metadata consistency (Author / Producer) ---
-        # (Also LLM-owned when active; the LLM is given the file metadata to compare.)
-        meta = doc.metadata or {}
-        for field_name, meta_key in (("Author", "author"), ("Producer", "producer")):
-            sheet_val, pdf_val = norm(row.get(field_name)), norm(meta.get(meta_key))
-            res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == pdf_val else FAIL,
-                    f"loadsheet={row.get(field_name, '').strip()!r}  pdf={(meta.get(meta_key) or '').strip()!r}")
+    text_field("Title matches document", row.get("Title", ""), "not found verbatim in text layer")
+    text_field("Issue Purpose matches document", row.get("Issue Purpose", ""),
+               "not found verbatim (may be abbreviated, e.g. IFC)")
+
+    # Revision: confirm against revision evidence (filename + rev tables in the text).
+    rval = norm(row.get("Revision"))
+    if rval == "":
+        res.add("Revision matches document", PASS, "not asserted (NA)")
+    else:
+        revs: set[str] = set()
+        mfn = re.search(r"_rev[ _]?0*(\d+)", actual, re.I)
+        if mfn:
+            revs.add(str(int(mfn.group(1))))
+        for mm in re.finditer(r"rev(?:ision)?\.?\s*0*(\d+)", hay):
+            revs.add(str(int(mm.group(1))))
+        for mm in re.finditer(r"-\s*rev\s*0*(\d+)", hay):
+            revs.add(str(int(mm.group(1))))
+        for mm in re.finditer(r"\b0*(\d+)\s+\d{1,2}[-/](?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", hay):
+            revs.add(str(int(mm.group(1))))
+        revs = {r for r in revs if r.isdigit() and int(r) < 100}  # drop years/page-nos
+        rv = str(int(rval)) if rval.isdigit() else rval
+        if rv in revs:
+            res.add("Revision matches document", PASS, f"rev {rv} confirmed (doc revs {sorted(revs)})")
+        elif revs:
+            res.add("Revision matches document", FAIL, f"loadsheet rev {rv} not among document revs {sorted(revs)}")
+        else:
+            unresolved.append(("Revision matches document", row.get("Revision", "").strip(),
+                               "no revision evidence in text layer"))
+
+    # File-level metadata consistency (Author / Producer) - pure string compare.
+    meta = doc.metadata or {}
+    for field_name, meta_key in (("Author", "author"), ("Producer", "producer")):
+        sheet_val, pdf_val = norm(row.get(field_name)), norm(meta.get(meta_key))
+        res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == pdf_val else FAIL,
+                f"loadsheet={row.get(field_name, '').strip()!r}  pdf={(meta.get(meta_key) or '').strip()!r}")
+
+    # Escalate ONLY the unresolved fields. With no LLM, fall back to the
+    # deterministic verdict (Title/Issue Purpose not found -> FAIL; Revision -> WARN).
+    if unresolved:
+        if client is not None:
+            _escalate(res, doc, doc_no, unresolved, client, model, model_lo, usage, cache, pdf_path)
+        else:
+            for n, lv, note in unresolved:
+                res.add(n, FB_STATUS.get(n, WARN), f"loadsheet {lv!r} NOT found in document - {note}")
 
     # --- DEMO checks (per document): PASSED for the demo because the reference
     #     data (PO system, prior-revision repository, document-control review
@@ -565,109 +580,203 @@ def make_llm_client(model_override: str | None = None):
     return client, deployment
 
 
-LLM_PROMPT = """You are a senior document-control QA reviewer. You are given a document as both \
-its extracted text and rendered page images (title block / revision block / revision-history table). \
-Verify the LOADSHEET DATA against the DOCUMENT DATA. Be exact - this is a compliance check and 100% \
-accuracy is required. (Document quality - OCR, blank pages, alignment - is checked separately; do NOT
-assess those here.)
+# Deterministic fallback verdict for a content field the text layer could not
+# confirm, used when the LLM is off or did not return that field.
+FB_STATUS = {"Title matches document": FAIL,
+             "Issue Purpose matches document": FAIL,
+             "Revision matches document": WARN}
 
-LOADSHEET ROW:
-{sheet}
-
-PDF FILE METADATA (authoritative for the Author and Producer fields):
-{meta}
-
-Respond with ONLY a JSON object of this exact shape (no prose, no markdown fences):
-{{"checks": [{{"name": "...", "status": "PASS|FAIL|WARN", "loadsheet_value": "...", "document_value": "...", "evidence": "..."}}]}}
-For each check: loadsheet_value = the value from the loadsheet row (or "NA"); document_value = what the
-document/metadata actually shows, quoted as printed (or "(none found)"); evidence = where you found it.
-
-Matching rules:
-  - Compare by MEANING, not exact string. "Issued for Construction" == "ISSUED FOR CONSTRUCTION" == "IFC".
-    Dates match if the same calendar date in any format (09/03/2021 == 09-Mar-2021 == 2021-03-09).
-  - Revision = the CURRENT revision: the highest / most recent row in the revision block or revision-history
-    table (the revision the document was issued at), NOT an older historical row.
-  - Issue Purpose = the description/status of that CURRENT revision (e.g. "Issued for Construction",
-    "Issued for Review", "Issued for Purchase", "Issued for Use").
-  - loadsheet "NA" and document genuinely has no such field -> PASS.
-  - loadsheet "NA" but the document clearly shows a value -> WARN.
-  - loadsheet value present and document shows a DIFFERENT value -> FAIL.
-  - loadsheet value present and document shows the SAME value -> PASS.
-
-Return EXACTLY one result for each of these names:
-  "Document Number (LLM)"   - loadsheet 'Document Number' vs the number printed in the title block.
-  "Title (LLM)"             - loadsheet 'Title' vs the document title in the title block.
-  "Revision (LLM)"          - loadsheet 'Revision' vs the document's current revision.
-  "Issue Purpose (LLM)"     - loadsheet 'Issue Purpose' vs the current revision's issue/status description.
-  "Diagram Number (LLM)"    - loadsheet 'Document Number' vs any drawing/diagram number shown; WARN if none.
-  "Contract Number (LLM)"   - any contract/PO number in the doc vs the loadsheet (WARN if neither has one).
-  "Author (LLM)"            - loadsheet 'Author' vs the PDF file metadata Author shown above (the originator
-                              named in the document title block is acceptable corroboration).
-  "Producer (LLM)"          - loadsheet 'Producer' vs the PDF file metadata Producer shown above (the
-                              software that generated the PDF).
-"""
+# USD per 1,000,000 tokens, (input, output). Azure pricing varies by region and
+# model version; these are the common GPT-4o list prices. Used only for the cost
+# estimate printed after a run - the token counts themselves come from the API.
+PRICING = {"gpt-4o-mini": (0.15, 0.60), "gpt-4o": (2.50, 10.0)}
 
 
-def _render_pages(doc, page_indices, dpi=150):
-    out = []
-    for p in page_indices:
-        if 0 <= p < doc.page_count:
-            png = doc[p].get_pixmap(dpi=dpi).tobytes("png")
-            out.append(base64.b64encode(png).decode())
-    return out
+class Usage:
+    """Accumulates LLM token usage across one run and estimates the $ cost."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.by_model: dict[str, list[int]] = {}
+
+    def add(self, model: str, prompt_tokens: int, completion_tokens: int) -> None:
+        self.calls += 1
+        slot = self.by_model.setdefault(model, [0, 0])
+        slot[0] += int(prompt_tokens or 0)
+        slot[1] += int(completion_tokens or 0)
+
+    def cost(self) -> float:
+        total = 0.0
+        for model, (pin, pout) in self.by_model.items():
+            key = next((k for k in PRICING if k in model.lower()), "gpt-4o")
+            ci, co = PRICING[key]
+            total += pin / 1e6 * ci + pout / 1e6 * co
+        return total
+
+    def summary(self) -> str:
+        if not self.calls:
+            return "LLM: 0 calls (all fields resolved deterministically) - $0.0000"
+        parts = [f"{m}: {i:,} in / {o:,} out" for m, (i, o) in self.by_model.items()]
+        return f"LLM: {self.calls} call(s) | " + "; ".join(parts) + f" | ~${self.cost():.4f}"
 
 
-def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None:
-    res = Result(f"DOCUMENT (LLM)  {os.path.basename(pdf_path)}")
+# Per-run usage, set by run_validation() and read by validate_one()/build_report().
+LAST_USAGE = Usage()
+
+_CACHE_FILE = os.path.join(HERE, ".llm_cache.json")
+
+
+def _load_cache() -> dict:
+    import json
     try:
-        import json
-        doc = fitz.open(pdf_path)
-        full_text = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))[:30000]
-        # Title block + revision history live on the first pages and the last sheet.
-        imgs = _render_pages(doc, sorted({0, 1, 2, doc.page_count - 1}))
-        meta = doc.metadata or {}
-        meta_str = "\n".join(f"  {label}: {meta.get(key) or '(none)'}"
-                             for label, key in (("Author", "author"), ("Producer", "producer"),
-                                                 ("Creator", "creator"), ("Title", "title")))
+        with open(_CACHE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-        sheet = "\n".join(f"  {k.strip()}: {v.strip()}" for k, v in row.items() if v.strip())
-        content = [{"type": "text",
-                    "text": LLM_PROMPT.format(sheet=sheet, meta=meta_str) + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
-        for b in imgs:
-            content.append({"type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b}", "detail": "high"}})
 
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            max_tokens=4000,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                {"role": "user", "content": content},
-            ],
-        )
-        # Fields whose value can be located and cropped from the document as evidence.
-        snippet_fields = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
-                          "Diagram Number (LLM)", "Contract Number (LLM)"}
-        text = resp.choices[0].message.content
-        for c in json.loads(text).get("checks", []):
-            name = c.get("name", "check")
-            status = c.get("status", WARN)
-            lv, dv, ev = c.get("loadsheet_value", ""), c.get("document_value", ""), c.get("evidence", "")
-            detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
-            snip = ""
-            if name in snippet_fields:
-                needle = dv if dv and dv.strip().upper() not in ("(NONE FOUND)", "NA", "NONE", "") else lv
-                snip = crop_highlight(doc, needle, status)
-            res.add(name, status, detail[:300], snip)
-        doc.close()
-    except Exception as e:
-        # Fail closed: when the LLM is the authoritative content reviewer, an
-        # incomplete review must not pass silently (deterministic content checks
-        # were skipped). Surface it as a FAIL so the document is flagged.
-        res.add("LLM review (could not complete)", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
-    return res
+def _save_cache(cache: dict) -> None:
+    import json
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+
+def titleblock_b64(doc, doc_no: str, dpi: int) -> str:
+    """Render JUST the title-block region (a band around the document number;
+    fallback: the bottom third of page 1, where drawing title blocks sit). A
+    small, legible crop costs a fraction of a full-page image."""
+    variants = [v for v in (doc_no, doc_no.upper(), doc_no[:45]) if v] if doc_no else []
+    for pno in range(min(doc.page_count, 4)):
+        page = doc[pno]
+        for v in variants:
+            try:
+                rects = page.search_for(v)
+            except Exception:
+                rects = []
+            if rects:
+                r, pr = rects[0], page.rect
+                clip = fitz.Rect(pr.x0, max(pr.y0, r.y0 - 90), pr.x1, min(pr.y1, r.y1 + 90)) & pr
+                return base64.b64encode(page.get_pixmap(clip=clip, dpi=dpi).tobytes("png")).decode()
+    page = doc[0]
+    pr = page.rect
+    clip = fitz.Rect(pr.x0, pr.y0 + pr.height * 2 / 3, pr.x1, pr.y1)
+    return base64.b64encode(page.get_pixmap(clip=clip, dpi=dpi).tobytes("png")).decode()
+
+
+def relevant_text(doc, doc_no: str, limit: int = 1800) -> str:
+    """A small, targeted slice of document text for the LLM: page 1, the
+    revision-history block, and a window around the document number - instead of
+    dumping 30k characters."""
+    full = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))
+    low = full.lower()
+    parts = [doc[0].get_text("text")] if doc.page_count else []
+    i = low.find("revision history")
+    if i >= 0:
+        parts.append("[REVISION HISTORY]\n" + full[i:i + 700])
+    if doc_no:
+        j = low.find(doc_no.lower())
+        if j >= 0:
+            parts.append(full[max(0, j - 150):j + 150])
+    return "\n---\n".join(parts)[:limit]
+
+
+ESCALATE_PROMPT = """You are a document-control QA reviewer. Confirm the specific LOADSHEET fields below \
+against the DOCUMENT (read the title block / revision block / revision-history table). Compare by MEANING, \
+not exact string ("IFC" == "Issued for Construction"; dates match in any format, 09/03/2021 == 09-Mar-2021). \
+Revision = the CURRENT (highest / most recent) revision. Be exact.
+
+DOCUMENT NUMBER: {doc_no}
+
+FIELDS TO CONFIRM:
+{fields}
+
+DOCUMENT TEXT (title-block / revision-history excerpts):
+{text}
+
+Respond with ONLY this JSON (no prose, no markdown):
+{{"checks":[{{"name":"<exact field name>","status":"PASS|FAIL|WARN","document_value":"<value as printed, or (none found)>","confidence":"high|low"}}]}}
+Rules: PASS if the document clearly shows a matching value; FAIL if it shows a DIFFERENT value; WARN if you \
+cannot find it. One entry per field. Use confidence "low" if the text/image is unclear."""
+
+
+def _llm_confirm(client, model, fields, doc_no, text, img_b64, detail, usage, max_tokens=600) -> dict:
+    """One LLM call confirming `fields` (list of (name, loadsheet_value, note))
+    against a cropped title-block image + trimmed text. Returns {name: check}."""
+    import json
+    field_lines = "\n".join(f"  - {n}: loadsheet={lv!r} ({note})" for n, lv, note in fields)
+    content = [{"type": "text",
+                "text": ESCALATE_PROMPT.format(doc_no=doc_no, fields=field_lines, text=text)}]
+    if img_b64:
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": detail}})
+    resp = client.chat.completions.create(
+        model=model, temperature=0, max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": "Document-control QA reviewer. JSON only."},
+                  {"role": "user", "content": content}])
+    u = getattr(resp, "usage", None)
+    if u is not None and usage is not None:
+        usage.add(model, u.prompt_tokens, u.completion_tokens)
+    return {c.get("name"): c for c in json.loads(resp.choices[0].message.content).get("checks", [])}
+
+
+def _escalate(res, doc, doc_no, unresolved, client, model_hi, model_lo, usage, cache, pdf_path) -> None:
+    """Resolve unresolved content fields with the LLM - cheaply:
+      * cache by (pdf hash + fields) so re-runs cost nothing;
+      * if a cheap model is configured, triage with it on a LOW-detail title-block
+        crop, then escalate only the still-uncertain fields to the main model on a
+        HIGH-detail crop; otherwise a single HIGH-detail call on the main model.
+    Each field gets the LLM verdict if returned, else its deterministic fallback."""
+    import hashlib
+    try:
+        sig = hashlib.sha1(open(pdf_path, "rb").read()).hexdigest()[:16]
+    except Exception:
+        sig = os.path.basename(pdf_path)
+    key = sig + "|" + "|".join(sorted(f"{n}={lv}" for n, lv, _ in unresolved))
+
+    verdicts = cache.get(key) if cache is not None else None
+    if verdicts is None:
+        try:
+            text = relevant_text(doc, doc_no)
+            if model_lo and model_lo != model_hi:
+                verdicts = _llm_confirm(client, model_lo, unresolved, doc_no, text,
+                                        titleblock_b64(doc, doc_no, 150), "low", usage)
+                weak = [(n, lv, note) for n, lv, note in unresolved
+                        if verdicts.get(n, {}).get("confidence") != "high"
+                        or verdicts.get(n, {}).get("status") == "WARN"]
+                if weak:
+                    verdicts.update(_llm_confirm(client, model_hi, weak, doc_no, text,
+                                                 titleblock_b64(doc, doc_no, 220), "high", usage))
+            else:
+                verdicts = _llm_confirm(client, model_hi, unresolved, doc_no, text,
+                                        titleblock_b64(doc, doc_no, 200), "high", usage)
+            if cache is not None:
+                cache[key] = verdicts
+                _save_cache(cache)
+        except Exception as e:
+            for n, lv, note in unresolved:
+                res.add(n, WARN, f"loadsheet={lv!r} | LLM escalation failed ({type(e).__name__}); {note}")
+            return
+
+    for n, lv, note in unresolved:
+        fb = FB_STATUS.get(n, WARN)
+        c = verdicts.get(n)
+        if c:
+            dv = c.get("document_value", "")
+            conf = c.get("confidence", "")
+            needle = dv if dv and dv.strip().upper() not in ("(NONE FOUND)", "NA", "NONE", "") else lv
+            res.add(n, c.get("status", fb),
+                    f"loadsheet={lv!r} | document={dv!r} (LLM{', ' + conf if conf else ''})",
+                    crop_highlight(doc, needle, c.get("status", fb)))
+        else:
+            res.add(n, fb, f"loadsheet={lv!r} | {note} (LLM did not return this field)")
+
+
+# (LLM content review is now performed inline by check_pdf -> _escalate, which
+#  only calls the model for fields the deterministic layer could not resolve.)
 
 
 # ---------------------------------------------------------------------------
@@ -680,8 +789,16 @@ def print_result(res: Result) -> None:
         print(f"  {color}[{c.status:4}]{RESET} {c.name}" + (f"  {DIM}- {c.detail}{RESET}" if c.detail else ""))
 
 
-def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[list[Result], bool]:
-    """Run both stages and return the Result objects + overall ok flag (no printing)."""
+def run_validation(loadsheet: str, files_dir: str, client, model: str,
+                   model_lo: str = "") -> tuple[list[Result], bool]:
+    """Run both stages and return the Result objects + overall ok flag (no
+    printing). LLM token usage for the run is recorded in the module-level
+    LAST_USAGE (read by validate_one / build_report)."""
+    global LAST_USAGE
+    usage = Usage()
+    LAST_USAGE = usage
+    cache = _load_cache() if client is not None else None
+
     results: list[Result] = []
     sheet_res, rows = validate_loadsheet(loadsheet, files_dir)
     results.append(sheet_res)
@@ -690,11 +807,8 @@ def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[
             pdf_path = os.path.join(files_dir, row.get("File Name", "").strip())
             if not os.path.isfile(pdf_path):
                 continue
-            results.append(check_pdf(pdf_path, row, llm_active=client is not None))
-            if client is not None:
-                llm = check_pdf_llm(client, pdf_path, row, model)
-                if llm is not None:
-                    results.append(llm)
+            results.append(check_pdf(pdf_path, row, client=client, model=model,
+                                     model_lo=model_lo, usage=usage, cache=cache))
     ok = all(r.ok for r in results)
     return results, ok
 
@@ -739,18 +853,25 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
         "headline": headline,
         "reasons": reasons,
         "stages": stages,
+        "llm": {
+            "calls": LAST_USAGE.calls,
+            "cost_usd": round(LAST_USAGE.cost(), 4),
+            "tokens": {m: {"in": i, "out": o} for m, (i, o) in LAST_USAGE.by_model.items()},
+        },
     }
 
 
-def validate_one(loadsheet: str, files_dir: str, client, model: str) -> bool:
+def validate_one(loadsheet: str, files_dir: str, client, model: str, model_lo: str = "") -> bool:
     print(f"\n{BOLD}{'=' * 78}{RESET}\n{BOLD}VALIDATING  {loadsheet}{RESET}\n{BOLD}{'=' * 78}{RESET}")
-    results, ok = run_validation(loadsheet, files_dir, client, model)
+    results, ok = run_validation(loadsheet, files_dir, client, model, model_lo)
     for r in results:
         print_result(r)
     if not results[0].ok:
         print(f"\n  {RED}{BOLD}LOADSHEET INVALID - document checks skipped.{RESET}")
     verdict = (GREEN + "VALID") if ok else (RED + "INVALID")
     print(f"\n  {BOLD}RESULT: {verdict}{RESET}")
+    if client is not None:
+        print(f"  {DIM}{LAST_USAGE.summary()}{RESET}")
     return ok
 
 
@@ -773,8 +894,13 @@ def main() -> int:
             client, model = make_llm_client(args.model)
         except Exception as e:
             print(f"{YELLOW}LLM checks unavailable ({e}); running deterministic only.{RESET}", file=sys.stderr)
+    # Optional cheaper deployment for triage (e.g. gpt-4o-mini); the main model
+    # only handles fields the cheap one is unsure about. Falls back to the main
+    # model when not set.
+    model_lo = os.environ.get("AZURE_OPENAI_DEPLOYMENT_MINI", "") if client else ""
     if client:
-        print(f"{DIM}LLM checks: ON (Azure OpenAI, deployment {model}){RESET}", file=sys.stderr)
+        tier = f"deployment {model}" + (f", triage {model_lo}" if model_lo else "")
+        print(f"{DIM}LLM checks: ON (Azure OpenAI, {tier}){RESET}", file=sys.stderr)
     else:
         why = "--no-llm" if args.no_llm else "no Azure OpenAI creds (set AZURE_OPENAI_* in doc-validator/.env)"
         print(f"{DIM}LLM checks: OFF ({why}). Deterministic checks only.{RESET}", file=sys.stderr)
@@ -783,20 +909,22 @@ def main() -> int:
     if args.json:
         target = args.loadsheet or os.path.join(
             LOADSHEET_DIR, f"loadsheet_{'pass' if args.variant == 'both' else args.variant}.csv")
-        results, ok = run_validation(target, args.files_dir, client, model)
+        results, ok = run_validation(target, args.files_dir, client, model, model_lo)
         import json
+        if client is not None:
+            print(f"{DIM}{LAST_USAGE.summary()}{RESET}", file=sys.stderr)
         print(json.dumps(build_report(results, ok, target)))
         return 0 if ok else 1
 
     if args.loadsheet:
-        valid = validate_one(args.loadsheet, args.files_dir, client, model)
+        valid = validate_one(args.loadsheet, args.files_dir, client, model, model_lo)
         return 0 if valid else 1
 
     targets = ["pass", "fake"] if args.variant == "both" else [args.variant]
     results = {}
     for v in targets:
         path = os.path.join(LOADSHEET_DIR, f"loadsheet_{v}.csv")
-        results[v] = validate_one(path, args.files_dir, client, model)
+        results[v] = validate_one(path, args.files_dir, client, model, model_lo)
 
     print(f"\n{BOLD}{'=' * 78}\nSUMMARY{RESET}")
     for v, ok in results.items():

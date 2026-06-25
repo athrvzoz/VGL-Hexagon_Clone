@@ -50,3 +50,6 @@ doc-validator/reports/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# doc-validator LLM response cache
+doc-validator/.llm_cache.json
