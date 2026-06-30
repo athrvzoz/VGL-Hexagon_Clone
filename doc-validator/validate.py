@@ -183,6 +183,27 @@ def loose_id_regex(doc_no: str):
     return re.compile(r"[\s./\\-]*".join(parts), re.I)
 
 
+def docno_revision_regex(doc_no: str):
+    """Match the document number immediately followed by an '_<digits>' revision
+    suffix (e.g. 'CP-...-00001_1', which is Document Number + '_' + Revision),
+    tolerating the same OCR/spacing variance as loose_id_regex. Returns None if
+    the document number has no alphanumerics."""
+    parts = []
+    for ch in doc_no:
+        if not ch.isalnum():
+            continue
+        up = ch.upper()
+        if up in ("I", "1", "L"):
+            parts.append("[I1L]")
+        elif up in ("O", "0"):
+            parts.append("[O0]")
+        else:
+            parts.append(re.escape(ch))
+    if not parts:
+        return None
+    return re.compile(r"[\s./\\-]*".join(parts) + r"_\s*\d+", re.I)
+
+
 def revision_history_numbers(text: str) -> list[int]:
     """Parse the numeric Rev column from a 'Revision History' table (e.g.
     [4, 3, 2]); empty if there is no parseable table. A rev token is an integer
@@ -413,15 +434,25 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             if markups else "no markups")
 
     # --- document number legible in every page's title block ---
-    # Three outcomes per page: clean exact match; present-but-garbled (the number
-    # is there but OCR mangled it -> a quality WARNING, NOT silently passed); or
-    # absent. The detail reports what was EXPECTED vs what was actually FOUND.
+    # Outcomes per page: clean exact match; present-but-garbled (the number is
+    # there but OCR mangled it -> a quality WARNING, NOT silently passed); or
+    # absent. We also flag pages whose footer prints the number with an '_<rev>'
+    # suffix (e.g. 'CP-...-00001_1'): the number is legible, but the printed form
+    # is Document Number + Revision rather than the bare number, so it is a
+    # WARNING rather than a clean pass. The detail reports EXPECTED vs FOUND.
     doc_no_meta = row.get("Document Number", "").strip()
     tgt_clean = clean_id(doc_no_meta)
     loose = loose_id_regex(doc_no_meta)
+    suffix_re = docno_revision_regex(doc_no_meta)
     pages_clean, pages_mangled, pages_missing, found_examples = [], [], [], []
+    pages_suffixed, suffix_examples = [], []
     if tgt_clean:
         for pno, t in enumerate(full_text_parts):
+            sm = suffix_re.search(t) if suffix_re else None
+            if sm:
+                pages_suffixed.append(pno + 1)
+                if len(suffix_examples) < 3:
+                    suffix_examples.append(f"p{pno + 1} found {re.sub(r'\s+', ' ', sm.group()).strip()!r}")
             if tgt_clean in clean_id(t):
                 pages_clean.append(pno + 1)
                 continue
@@ -433,11 +464,18 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             else:
                 pages_missing.append(pno + 1)
     exp = f"expected {doc_no_meta!r}"
-    if not pages_mangled and not pages_missing:
+    if not pages_mangled and not pages_missing and not pages_suffixed:
         res.add("Document metadata legible on each page", PASS,
                 f"{exp}; present and clean (exact match) on all {n} page(s)")
     else:
         notes = [exp]
+        if pages_suffixed:
+            rev = row.get("Revision", "").strip()
+            rev_txt = f" (Document Number + Revision {rev!r})" if rev else " (Document Number + Revision)"
+            note = f"footer carries a revision suffix on page(s) {pages_suffixed}"
+            if suffix_examples:
+                note += " - e.g. " + "; ".join(suffix_examples)
+            notes.append(note + f" - matches{rev_txt}")
         if pages_mangled:
             notes.append(f"garbled (OCR/spacing) on page(s) {pages_mangled} - " + "; ".join(found_examples))
         if pages_missing:
