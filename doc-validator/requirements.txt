@@ -1,3 +1,5 @@
 # Document validation tooling
-pymupdf>=1.26     # PDF parsing: text layer, images, block geometry, page rendering
-openai>=1.40      # optional LLM checks via Azure OpenAI (GPT-4o, vision + text)
+pymupdf>=1.26      # PDF parsing: text layer, images, block geometry, page rendering
+openai>=1.40       # optional LLM checks via Azure OpenAI (GPT-4o, vision + text)
+pytesseract>=0.3.10  # optional: OCR images to flag non-selectable text (needs the Tesseract binary)
+Pillow>=10.0       # image handling for the OCR check

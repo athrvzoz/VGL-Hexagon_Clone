@@ -204,6 +204,93 @@ def docno_revision_regex(doc_no: str):
     return re.compile(r"[\s./\\-]*".join(parts) + r"_\s*\d+", re.I)
 
 
+# --- local OCR (Tesseract): detect text printed *inside* images that is not in
+#     the selectable text layer (e.g. a scanned note/figure a user can't select).
+#     Free of any LLM/API cost; runs on CPU. Disabled gracefully when Tesseract
+#     is not installed, so the validator behaves exactly as before without it. ---
+_OCR_READY: bool | None = None
+# Skip only degenerate sub-icon images (1px spacers, rule lines); logos and
+# anything larger ARE OCR'd. Set to 0.0 to OCR literally every image.
+OCR_MIN_AREA_FRAC = 0.001
+# Number of distinct OCR'd words that must be missing from the SELECTABLE TEXT AT
+# THE IMAGE'S OWN LOCATION before we flag it - keeps OCR noise from false-firing.
+OCR_MIN_MISSING_WORDS = 3
+
+
+def ocr_available() -> bool:
+    """True when pytesseract + the Tesseract binary are usable (result cached).
+    Honors a TESSERACT_CMD env var for Windows installs that aren't on PATH, and
+    prints a one-time note to stderr when OCR is off so the skip is visible."""
+    global _OCR_READY
+    if _OCR_READY is not None:
+        return _OCR_READY
+    try:
+        import pytesseract
+        exe = os.environ.get("TESSERACT_CMD")
+        if exe:
+            pytesseract.pytesseract.tesseract_cmd = exe
+        pytesseract.get_tesseract_version()
+        _OCR_READY = True
+    except Exception as e:
+        print(f"{DIM}Image-text OCR check: OFF ({type(e).__name__}). "
+              f"Install Tesseract + 'pip install pytesseract Pillow' (and set TESSERACT_CMD "
+              f"if it is not on PATH) to enable it.{RESET}", file=sys.stderr)
+        _OCR_READY = False
+    return _OCR_READY
+
+
+def image_text_not_selectable(page) -> list[tuple[str, str]]:
+    """OCR every embedded image on the page (logos included) and return
+    (sample, snippet) for each one whose OCR'd words are NOT present in the
+    selectable text AT THE IMAGE'S OWN LOCATION - i.e. the text is drawn into the
+    picture rather than being real, selectable text where it appears. Words that
+    happen to be selectable elsewhere on the page do NOT excuse it. `sample` is a
+    short OCR excerpt; `snippet` is a data-URL PNG of the image region (so the
+    report can show it). Only degenerate sub-icon images are skipped. Needs Tesseract."""
+    import io
+    import pytesseract
+    from PIL import Image
+
+    page_area = (page.rect.width * page.rect.height) or 1.0
+    hits, seen = [], set()
+    for img in page.get_images(full=True):
+        xref = img[0]
+        if xref in seen:
+            continue
+        seen.add(xref)
+        try:
+            rects = page.get_image_rects(xref)
+        except Exception:
+            continue
+        for r in rects:
+            if (r.width * r.height) / page_area < OCR_MIN_AREA_FRAC:
+                continue  # degenerate sub-icon image (spacer/rule) - skip
+            try:
+                png = page.get_pixmap(clip=r, dpi=200).tobytes("png")
+                ocr = pytesseract.image_to_string(Image.open(io.BytesIO(png)))
+            except Exception:
+                continue
+            ocr_words = re.findall(r"[A-Za-z0-9]{3,}", ocr)
+            if not ocr_words:
+                continue
+            # selectable text physically WITHIN this image's box (positional check)
+            here = set(re.findall(r"[a-z0-9]{3,}", page.get_text("text", clip=r).lower()))
+            missing = {w.lower() for w in ocr_words if w.lower() not in here}
+            if len(missing) >= OCR_MIN_MISSING_WORDS:
+                sample = re.sub(r"\s+", " ", ocr).strip()[:80]
+                # highlight the offending image: red box around it + a little context
+                try:
+                    page.draw_rect(r, color=(0.85, 0.16, 0.13), width=2.0)
+                    clip = fitz.Rect(r.x0 - 40, r.y0 - 30, r.x1 + 40, r.y1 + 30) & page.rect
+                    snip_png = page.get_pixmap(clip=clip, dpi=150).tobytes("png")
+                except Exception:
+                    snip_png = png  # fall back to the plain crop
+                snippet = "data:image/png;base64," + base64.b64encode(snip_png).decode()
+                hits.append((sample, snippet))
+                break  # one finding per image is enough
+    return hits
+
+
 def revision_history_numbers(text: str) -> list[int]:
     """Parse the numeric Rev column from a 'Revision History' table (e.g.
     [4, 3, 2]); empty if there is no parseable table. A rev token is an integer
@@ -354,6 +441,8 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     overlap_pages, overflow_pages = [], []
     orientations, markups = [], []
     full_text_parts = []
+    img_text_hits = []  # (page_no, ocr_sample) for images holding non-selectable text
+    ocr_ready = ocr_available()
 
     for pno in range(n):
         page = doc[pno]
@@ -372,6 +461,12 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             pages_not_ocrd.append(pno + 1)
         if not has_text:
             pages_no_text.append(pno + 1)
+
+        # Text printed inside an image that is NOT in the selectable text layer
+        # (e.g. a scanned note/figure). OCR only sizeable images; logos are skipped.
+        if ocr_ready and has_img:
+            for sample, snippet in image_text_not_selectable(page):
+                img_text_hits.append((pno + 1, sample, snippet))
 
         # Geometry: overlapping text blocks and content spilling off the page.
         blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
@@ -405,6 +500,21 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     res.add("images are OCR'd", FAIL if pages_not_ocrd else PASS,
             f"image-only pages with no text layer: {pages_not_ocrd[:10]}" if pages_not_ocrd
             else "no un-OCR'd image pages")
+
+    # --- text inside images is selectable (Tesseract; skipped if not installed) ---
+    # Catches the case the page-level OCR check cannot: a page that HAS a text
+    # layer but also embeds a picture (a scanned note/figure) carrying its own
+    # text that is not selectable/searchable. Advisory WARN - OCR is imperfect.
+    if ocr_ready:
+        if img_text_hits:
+            ex = "; ".join(f"p{p} text not selectable, e.g. {s!r}" for p, s, _ in img_text_hits[:3])
+            res.add("Text inside images is selectable", WARN,
+                    f"{len(img_text_hits)} image(s) carry text missing from the page text layer "
+                    f"(should be OCR'd / made selectable): {ex}",
+                    img_text_hits[0][2])  # show the first offending image as evidence
+        else:
+            res.add("Text inside images is selectable", PASS,
+                    "no image carries text that is absent from the selectable text layer")
 
     # --- blank pages ---
     res.add("no blank pages", FAIL if pages_blank else PASS,

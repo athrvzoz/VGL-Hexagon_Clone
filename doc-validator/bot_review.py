@@ -133,8 +133,12 @@ def _render_check(c: dict, e) -> str:
     dot = "✓" if st == "PASS" else "✗" if st == "FAIL" else "!"
     evid = ""
     if c.get("snippet"):
-        cap = ("Found in document (highlighted)" if st == "PASS"
-               else "Document shows this (highlighted) — does not match the loadsheet")
+        if "image" in c["name"].lower():  # OCR / image-text evidence
+            cap = "Text printed inside this image is not selectable / not OCR'd"
+        elif st == "PASS":
+            cap = "Found in document (highlighted)"
+        else:
+            cap = "Document shows this (highlighted) — does not match the loadsheet"
         evid = (f'<figure class="evidence"><img src="{c["snippet"]}" alt="evidence" loading="lazy">'
                 f'<figcaption>{e(cap)}</figcaption></figure>')
     return (f'<div class="check {st.lower()}"><div class="crow"><span class="dot">{dot}</span>'
