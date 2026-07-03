@@ -43,6 +43,7 @@ import csv
 import os
 import re
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -82,6 +83,7 @@ class Check:
 class Result:
     title: str
     checks: list[Check] = field(default_factory=list)
+    elapsed: float = 0.0  # seconds spent processing this stage/document
 
     def add(self, name: str, status: str, detail: str = "", snippet: str = "") -> None:
         self.checks.append(Check(name, status, detail, snippet))
@@ -717,7 +719,7 @@ LLM_PROMPT = """You are a senior document-control QA reviewer. You are given a d
 its extracted text and rendered page images (title block / revision block / revision-history table). \
 Verify the LOADSHEET DATA against the DOCUMENT DATA. Be exact - this is a compliance check and 100% \
 accuracy is required. (Document quality - OCR, blank pages, alignment - is checked separately; do NOT
-assess those here.)
+assess those here, EXCEPT for the single stamp/seal text-selectability check named below.)
 
 LOADSHEET ROW:
 {sheet}
@@ -753,6 +755,16 @@ Return EXACTLY one result for each of these names:
                               named in the document title block is acceptable corroboration).
   "Producer (LLM)"          - loadsheet 'Producer' vs the PDF file metadata Producer shown above (the
                               software that generated the PDF).
+  "Stamp / seal text is selectable (LLM)" - Examine every engineer's stamp, seal, approval/QA stamp,
+                              signature block and company/vendor logo visible in the rendered pages
+                              (look closely at the higher-resolution title-block crops). If any of them
+                              contains text - an engineer's name, a licence/registration number, words
+                              such as "PROFESSIONAL ENGINEER" or a state name, a company name - that does
+                              NOT appear in the EXTRACTED DOCUMENT TEXT above, return WARN and put that
+                              text in document_value (it is drawn as an image/vector, so it is not
+                              selectable/searchable and should be made selectable / OCR'd). If every such
+                              stamp/seal/logo's text is also present in the extracted text, or there are
+                              no stamps/seals/logos at all, return PASS. loadsheet_value = "NA".
 """
 
 
@@ -765,6 +777,24 @@ def _render_pages(doc, page_indices, dpi=150):
     return out
 
 
+def _render_titleblock_crops(doc, dpi=220):
+    """Higher-resolution crops of the bottom band of the first and last page,
+    where title blocks / engineer stamps / seals / company logos usually sit -
+    so the LLM can read small stamp text that is easy to miss in the downscaled
+    full-page images (used by the 'Stamp / seal text is selectable' check)."""
+    out, seen = [], set()
+    for p in (0, doc.page_count - 1):
+        if p in seen or not (0 <= p < doc.page_count):
+            continue
+        seen.add(p)
+        page = doc[p]
+        r = page.rect
+        band = fitz.Rect(r.x0, r.y0 + r.height * 0.6, r.x1, r.y1) & r  # bottom 40%
+        png = page.get_pixmap(clip=band, dpi=dpi).tobytes("png")
+        out.append(base64.b64encode(png).decode())
+    return out
+
+
 def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None:
     res = Result(f"DOCUMENT (LLM)  {os.path.basename(pdf_path)}")
     try:
@@ -773,6 +803,8 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
         full_text = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))[:30000]
         # Title block + revision history live on the first pages and the last sheet.
         imgs = _render_pages(doc, sorted({0, 1, 2, doc.page_count - 1}))
+        # Extra hi-res crops of the title-block band so small stamp/seal text is legible.
+        imgs += _render_titleblock_crops(doc)
         meta = doc.metadata or {}
         meta_str = "\n".join(f"  {label}: {meta.get(key) or '(none)'}"
                              for label, key in (("Author", "author"), ("Producer", "producer"),
@@ -831,17 +863,24 @@ def print_result(res: Result) -> None:
 def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[list[Result], bool]:
     """Run both stages and return the Result objects + overall ok flag (no printing)."""
     results: list[Result] = []
+    t0 = time.perf_counter()
     sheet_res, rows = validate_loadsheet(loadsheet, files_dir)
+    sheet_res.elapsed = time.perf_counter() - t0
     results.append(sheet_res)
     if sheet_res.ok:  # documents are only checked if the loadsheet is clean
         for row in rows:
             pdf_path = os.path.join(files_dir, row.get("File Name", "").strip())
             if not os.path.isfile(pdf_path):
                 continue
-            results.append(check_pdf(pdf_path, row, llm_active=client is not None))
+            t0 = time.perf_counter()
+            det = check_pdf(pdf_path, row, llm_active=client is not None)
+            det.elapsed = time.perf_counter() - t0
+            results.append(det)
             if client is not None:
+                t0 = time.perf_counter()
                 llm = check_pdf_llm(client, pdf_path, row, model)
                 if llm is not None:
+                    llm.elapsed = time.perf_counter() - t0
                     results.append(llm)
     ok = all(r.ok for r in results)
     return results, ok
@@ -855,6 +894,7 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
     stages = [{
         "title": r.title,
         "ok": r.ok,
+        "elapsed": r.elapsed,
         "checks": [{"name": c.name, "status": c.status, "detail": c.detail, "snippet": c.snippet}
                    for c in r.checks],
     } for r in results]
@@ -886,6 +926,7 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
         "overall": "VALID" if ok else "INVALID",
         "headline": headline,
         "reasons": reasons,
+        "elapsed_total": sum(r.elapsed for r in results),
         "stages": stages,
     }
 

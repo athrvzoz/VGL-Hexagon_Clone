@@ -95,6 +95,15 @@ def run_validator(loadsheet_csv: str, files_dir: str, use_llm: bool) -> dict:
         }
 
 
+def _fmt_secs(s) -> str:
+    """Human-friendly duration, e.g. '3.4s' or '1m 05s'."""
+    s = float(s or 0)
+    if s < 60:
+        return f"{s:.1f}s"
+    m, sec = divmod(int(round(s)), 60)
+    return f"{m}m {sec:02d}s"
+
+
 def _count_checks(checks: list) -> dict:
     """Tally PASS / FAIL / WARN over a list of check dicts."""
     c = {"PASS": 0, "FAIL": 0, "WARN": 0}
@@ -201,6 +210,8 @@ def render_html(report: dict, corr: str) -> str:
     for i, (fn, parts) in enumerate(docs.items()):
         all_checks = (parts["nollm"]["checks"] if parts["nollm"] else []) + \
                      (parts["llm"]["checks"] if parts["llm"] else [])
+        doc_secs = sum((parts[k].get("elapsed", 0) if parts[k] else 0) for k in ("nollm", "llm"))
+        doc_time = _fmt_secs(doc_secs)
         dc = _count_checks(all_checks)
         dok = dc["FAIL"] == 0
         badge = (f'<span class="dbadge fail">{dc["FAIL"]}</span>' if dc["FAIL"]
@@ -209,7 +220,8 @@ def render_html(report: dict, corr: str) -> str:
         active = " active" if i == 0 else ""
         doc_links += (f'<button class="doclink{active}" data-doc="{i}" onclick="showDoc({i})">'
                       f'<span class="dl-ico {"ok" if dok else "bad"}">{"✓" if dok else "✗"}</span>'
-                      f'<span class="dl-txt"><span class="dl-num">Document {i + 1}</span>'
+                      f'<span class="dl-txt"><span class="dl-num">Document {i + 1}'
+                      f'<span class="dl-time">⏱ {doc_time}</span></span>'
                       f'<span class="dl-name">{e(fn)}</span></span>{badge}</button>')
 
         nollm_block = _render_checks_block(parts["nollm"], e,
@@ -219,7 +231,8 @@ def render_html(report: dict, corr: str) -> str:
                                          "(run the bot without --no-llm to enable them).")
         doc_panes += (
             f'<section class="docpane{active}" data-doc="{i}">'
-            f'<div class="dochead"><h2>Document {i + 1}</h2><span class="docfile">{e(fn)}</span></div>'
+            f'<div class="dochead"><h2>Document {i + 1}</h2><span class="docfile">{e(fn)}</span>'
+            f'<span class="doctime">⏱ processed in {doc_time}</span></div>'
             f'<div class="subtabs">'
             f'<button class="subtab active" onclick="showSub({i},\'nollm\',this)">No&nbsp;LLM &middot; deterministic</button>'
             f'<button class="subtab" onclick="showSub({i},\'llm\',this)">LLM &middot; AI review</button>'
@@ -301,13 +314,15 @@ def render_html(report: dict, corr: str) -> str:
  .doclink.active{{border-color:#1a73e8;background:#e8f0fe;box-shadow:0 0 0 1px #1a73e8 inset}}
  .dl-ico{{font-weight:800;width:18px;text-align:center}} .dl-ico.ok{{color:#1e8e3e}} .dl-ico.bad{{color:#d93025}}
  .dl-txt{{display:flex;flex-direction:column;min-width:0;flex:1}}
- .dl-num{{font-size:12.5px;font-weight:800;color:#202124}}
+ .dl-num{{font-size:12.5px;font-weight:800;color:#202124;display:flex;align-items:center;gap:6px}}
+ .dl-time{{font-size:10.5px;font-weight:700;color:#5f6368;background:#eef0f2;border-radius:9px;padding:1px 7px}}
  .dl-name{{font-size:10.5px;color:#5f6368;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
  .dbadge{{font-size:11px;font-weight:800;min-width:22px;text-align:center;border-radius:11px;padding:2px 7px}}
  .dbadge.fail{{background:#d93025;color:#fff}} .dbadge.warn{{background:#f9ab00;color:#3c2b00}} .dbadge.ok{{background:#e6f4ea;color:#1e8e3e}}
  .docpane{{display:none}} .docpane.active{{display:block}}
  .dochead{{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}}
  .dochead h2{{margin:0;font-size:18px}} .docfile{{font-size:12px;color:#5f6368;font-weight:600;word-break:break-all}}
+ .doctime{{font-size:11.5px;font-weight:700;color:#1a73e8;background:#e8f0fe;border-radius:11px;padding:2px 10px}}
  .subtabs{{display:inline-flex;background:#eef0f2;border-radius:10px;padding:4px;gap:4px;margin-bottom:16px}}
  .subtab{{appearance:none;border:0;background:none;cursor:pointer;font:700 12.5px 'Segoe UI',Arial;color:#5f6368;padding:7px 16px;border-radius:7px}}
  .subtab.active{{background:#fff;color:#1a73e8;box-shadow:0 1px 3px rgba(0,0,0,.14)}}
@@ -320,7 +335,7 @@ def render_html(report: dict, corr: str) -> str:
    <div class="hero-l">
      <h1>{'✓ VALIDATION PASSED' if ok else '✗ VALIDATION FAILED'}</h1>
      <p>{e(report.get('headline', ''))}</p>
-     <div class="meta"><b>Loadsheet:</b> {e(report.get('loadsheet', ''))} &nbsp;&middot;&nbsp; <b>Transmittal:</b> {e(corr)}</div>
+     <div class="meta"><b>Loadsheet:</b> {e(report.get('loadsheet', ''))} &nbsp;&middot;&nbsp; <b>Transmittal:</b> {e(corr)} &nbsp;&middot;&nbsp; <b>Total time:</b> ⏱ {_fmt_secs(report.get('elapsed_total', 0))}</div>
    </div>
    {_donut_svg(counts['PASS'], counts['FAIL'], counts['WARN'])}
  </div>
