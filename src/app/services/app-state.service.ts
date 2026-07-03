@@ -1,5 +1,5 @@
 import { Injectable, signal, computed, inject, NgZone } from '@angular/core';
-import { ContractTask, BotStatus, ValidationReport, BotStage } from '../models/task.model';
+import { ContractTask, BotStatus, ValidationReport, BotStage, BotCheck } from '../models/task.model';
 import { TaskService } from './task.service';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -130,6 +130,20 @@ export class AppStateService {
     return this.reportFilter() === 'issues'
       ? stage.checks.filter(c => c.status !== 'PASS')
       : stage.checks;
+  }
+
+  // Caption under a check's evidence image(s). Logo/seal checks show crops of the
+  // logos themselves; other checks highlight a matched (or mismatched) value.
+  evidenceCaption(c: BotCheck): string {
+    const n = c.name.toLowerCase();
+    if (['image', 'seal', 'stamp', 'logo', 'signature'].some(k => n.includes(k))) {
+      return c.status === 'PASS'
+        ? 'The text in each highlighted logo/seal is selectable in the document.'
+        : 'A red box marks a logo/seal whose text is baked into the image (not selectable).';
+    }
+    return c.status === 'PASS'
+      ? 'Found in the document (highlighted).'
+      : 'The document shows this (highlighted) — it does not match the loadsheet.';
   }
 
   downloadReport() {
@@ -353,10 +367,10 @@ export class AppStateService {
   exportData() {
     const task = this.selectedTask();
     if (task && task.project === 'C2 PROJECT') {
-      // Export the loadsheet wired to this task: the matching ("pass") loadsheet
-      // mirrors the PDF metadata; the "fake" loadsheet is deliberately mismatched
-      // so the validation script fails on it.
-      const variant = task.loadsheetVariant === 'fake' ? 'fake' : 'pass';
+      // Export the loadsheet wired to this task. Each transmittal names its own
+      // loadsheet via "Loadsheet Variant" (e.g. 'cp' -> loadsheet_cp.csv,
+      // 'vg' -> loadsheet_vg.csv); it defaults to the matching 'pass' loadsheet.
+      const variant = task.loadsheetVariant || 'pass';
       const csvUrl = `/loadsheets/loadsheet_${variant}.csv`;
       fetch(csvUrl)
         .then(response => response.blob())

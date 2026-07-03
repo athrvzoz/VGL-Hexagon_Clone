@@ -34,7 +34,7 @@ export interface ContractTask {
   contract?: string;
   comment?: string;
   attachments?: string[];
-  loadsheetVariant?: 'pass' | 'fake';
+  loadsheetVariant?: string;  // maps to /loadsheets/loadsheet_<variant>.csv (e.g. 'pass', 'fake', 'cp', 'vg')
 }
 
 export interface Project {
@@ -49,7 +49,8 @@ export interface BotCheck {
   name: string;
   status: 'PASS' | 'FAIL' | 'WARN';
   detail: string;
-  snippet?: string;  // data-URL PNG: cropped + highlighted region of the PDF
+  snippet?: string;     // data-URL PNG: one cropped + highlighted region of the PDF
+  snippets?: string[];  // data-URL PNGs: several crops (e.g. every logo / seal image)
 }
 
 export interface BotStage {

@@ -252,8 +252,10 @@ body {
   border: 1px solid var(--border-color); border-radius: 6px; max-width: 460px;
 }
 .report-evidence img {
-  display: block; max-width: 100%; height: auto; border-radius: 3px;
+  display: inline-block; max-width: 100%; height: auto; border-radius: 3px;
+  vertical-align: top; margin: 0 6px 6px 0;
 }
+.report-evidence img + img { max-width: 240px; }
 .report-evidence figcaption {
   font-size: 11px; color: #5f6368; margin-top: 4px;
 }

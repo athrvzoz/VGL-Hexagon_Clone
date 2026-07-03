@@ -39,7 +39,10 @@ VALIDATE = os.path.join(HERE, "validate.py")
 ENV_FILE = os.path.join(HERE, ".env")
 REPORTS_DIR = os.path.join(HERE, "reports")
 URL = "http://localhost:4200/"
-DEMO_MARKER = "ZEN-TRN-01001-26"  # identifies the two demo transmittal rows
+DEMO_MARKER = "ZEN-TRN-01001-26"  # identifies the demo transmittal rows
+# A demo row is the "defective" one when its correspondence carries either of
+# these tags (the CP -INVALID transmittal). It is skipped unless --defective is set.
+DEFECTIVE_MARKERS = ("INVALID", "FAKE")
 
 
 def load_env_file() -> None:
@@ -112,272 +115,270 @@ def _count_checks(checks: list) -> dict:
     return c
 
 
-def _donut_svg(p: int, f: int, w: int) -> str:
-    """Inline SVG donut chart of pass/fail/warn proportions (no external libs)."""
-    total = p + f + w
-    C = 339.292  # circumference for r=54
-    if total == 0:
-        ring = f'<circle cx="60" cy="60" r="54" fill="none" stroke="#e8eaed" stroke-width="13"/>'
-    else:
-        ring, off = "", 0.0
-        for val, color in ((p, "#1e8e3e"), (f, "#d93025"), (w, "#f9ab00")):
-            if val <= 0:
-                continue
-            length = (val / total) * C
-            ring += (f'<circle cx="60" cy="60" r="54" fill="none" stroke="{color}" '
-                     f'stroke-width="13" stroke-dasharray="{length:.2f} {C - length:.2f}" '
-                     f'stroke-dashoffset="{-off:.2f}" transform="rotate(-90 60 60)"/>')
-            off += length
-    pct = round(100 * p / total) if total else 0
-    return (f'<svg viewBox="0 0 120 120" class="donut" role="img" aria-label="{pct}% passed">'
-            f'<circle cx="60" cy="60" r="54" fill="none" stroke="#eef1f3" stroke-width="13"/>'
-            f'{ring}'
-            f'<text x="60" y="56" text-anchor="middle" class="d-pct">{pct}%</text>'
-            f'<text x="60" y="74" text-anchor="middle" class="d-lab">passed</text></svg>')
+def _thumbs(check: dict) -> str:
+    """Evidence cell: thumbnails for a check's highlighted crop + any logo/seal
+    crops, each opening the lightbox on click. An em-dash when there is none."""
+    imgs = ([check["snippet"]] if check.get("snippet") else []) + list(check.get("snippets") or [])
+    if not imgs:
+        return '<span class="none">&mdash;</span>'
+    return "".join(f'<img class="thumb" src="{u}" loading="lazy" onclick="openLb(this.src)" '
+                   f'alt="evidence" title="Click to enlarge">' for u in imgs)
 
 
-def _render_check(c: dict, e) -> str:
-    """One check line: status dot, name, detail, and an optional evidence screenshot."""
-    st = c["status"]
-    dot = "✓" if st == "PASS" else "✗" if st == "FAIL" else "!"
-    evid = ""
-    if c.get("snippet"):
-        if "image" in c["name"].lower():  # OCR / image-text evidence
-            cap = "Text printed inside this image is not selectable / not OCR'd"
-        elif st == "PASS":
-            cap = "Found in document (highlighted)"
+# Some items are shown as "detected" info rows (with a screenshot when found)
+# rather than pass/fail checks, so they are pulled out of the checks list.
+DETECTED_NAMES = ("Security Classification", "Contract Number", "Diagram Number")
+DETECTED_LABELS = {
+    "Security Classification": "Security classification detected",
+    "Contract Number": "Contract number detected",
+    "Diagram Number": "Diagram number detected",
+}
+_NONE_VALUES = {"", "(NONE FOUND)", "NA", "NONE", "(NONE)", "N/A"}
+
+
+def _split_detected(checks: list) -> tuple[dict, list]:
+    """Separate the Contract/Diagram-number items from the real checks. Returns
+    ({name: {found, value, snippet}}, remaining_checks)."""
+    detected, remaining = {}, []
+    for c in checks:
+        if c["name"] in DETECTED_NAMES:
+            m = re.search(r"document=(['\"])(.*?)\1", c.get("detail", ""))
+            val = (m.group(2).strip() if m else "")
+            # "found" is based on the VALUE only - a screenshot may accompany a
+            # "(none found)" result (e.g. a classification section we won't guess),
+            # so the crop must not by itself count as "found".
+            found = bool(val) and val.upper() not in _NONE_VALUES
+            detected[c["name"]] = {"found": found, "value": val, "snippet": c.get("snippet", "")}
         else:
-            cap = "Document shows this (highlighted) — does not match the loadsheet"
-        evid = (f'<figure class="evidence"><img src="{c["snippet"]}" alt="evidence" loading="lazy">'
-                f'<figcaption>{e(cap)}</figcaption></figure>')
-    return (f'<div class="check {st.lower()}"><div class="crow"><span class="dot">{dot}</span>'
-            f'<span class="cname">{e(c["name"])}</span>'
-            f'<span class="cdet">{e(c.get("detail", "") or "")}</span></div>{evid}</div>')
+            remaining.append(c)
+    return detected, remaining
 
 
-def _render_checks_block(stage: dict | None, e, empty_msg: str) -> str:
-    """A mini PASS/FAIL/WARN summary line followed by the stage's check rows."""
-    if stage is None or not stage.get("checks"):
-        return f'<p class="empty">{e(empty_msg)}</p>'
-    cc = _count_checks(stage["checks"])
-    rows = "".join(_render_check(c, e) for c in stage["checks"])
-    bar = (f'<div class="ministats">'
-           f'<span class="ms pass">✓ {cc["PASS"]} passed</span>'
-           f'<span class="ms fail">✗ {cc["FAIL"]} failed</span>'
-           f'<span class="ms warn">! {cc["WARN"]} warnings</span></div>')
-    return bar + f'<div class="checks">{rows}</div>'
+def _detected_panel(detected: dict, e) -> str:
+    """The 'Detected identifiers' strip: 'Contract number detected' / 'Diagram
+    number detected' with the value and a screenshot when one was found."""
+    if not detected:
+        return ""
+    items = ""
+    for name in DETECTED_NAMES:
+        d = detected.get(name)
+        if not d:
+            continue
+        label = DETECTED_LABELS.get(name, name + " detected")
+        shot = (f'<img class="thumb" src="{d["snippet"]}" loading="lazy" onclick="openLb(this.src)" '
+                f'alt="evidence" title="Click to enlarge">') if d.get("snippet") else ""
+        if d["found"]:
+            items += (f'<div class="det-item"><span class="det-ico yes">&#10003;</span>'
+                      f'<span class="det-label">{e(label)}</span>'
+                      f'<span class="det-val">{e(d["value"])}</span>{shot}</div>')
+        else:
+            items += (f'<div class="det-item"><span class="det-ico no">&mdash;</span>'
+                      f'<span class="det-label">{e(label)}</span>'
+                      f'<span class="det-val none">none found</span>{shot}</div>')
+    return f'<div class="detected"><div class="det-title">Detected identifiers</div>{items}</div>'
+
+
+def _checks_table(checks: list, e) -> str:
+    """SDx-style table of checks (#, Check, Status, Notes, Evidence)."""
+    rows = ""
+    for i, c in enumerate(checks, 1):
+        st = c["status"]
+        rows += (f'<tr class="row-{st.lower()}"><td class="num">{i}</td>'
+                 f'<td class="step">{e(c["name"])}</td>'
+                 f'<td class="{st.lower()}">{st}</td>'
+                 f'<td class="notes">{e(c.get("detail", "") or "")}</td>'
+                 f'<td class="shot">{_thumbs(c)}</td></tr>')
+    return ('<table><thead><tr><th>#</th><th>Check</th><th>Status</th><th>Notes</th>'
+            f'<th>Evidence</th></tr></thead><tbody>{rows}</tbody></table>')
 
 
 def render_html(report: dict, corr: str) -> str:
-    """Self-contained interactive HTML report.
-
-    Layout: a summary header (verdict, total passed/failed/warning counts and a
-    donut chart) over two tabs — Loadsheet and Documents. The Documents tab lists
-    every PDF; each document has its own LLM / No-LLM sub-tabs, with the evidence
-    screenshots placed beside the LLM findings."""
+    """HxGN SDx-style bot execution report. Navy/teal SDx theme: a summary header,
+    a Stage 1 loadsheet (gate) table, then a document navigator - the list of
+    documents on the left, the selected document's checks on the right. Contract /
+    Diagram numbers are surfaced as 'detected' items with a screenshot rather than
+    as pass/fail checks."""
     from collections import OrderedDict
     e = html.escape
     ok = report["overall"] == "VALID"
 
-    # ---- split stages into the loadsheet stage and per-file document stages ----
     loadsheet_stage = None
     docs: "OrderedDict[str, dict]" = OrderedDict()
     for s in report.get("stages", []):
-        title = s["title"]
-        if title.startswith("DOCUMENT (LLM)"):
-            fn = title[len("DOCUMENT (LLM)"):].strip()
-            docs.setdefault(fn, {"nollm": None, "llm": None})["llm"] = s
-        elif title.startswith("DOCUMENT"):
-            fn = title[len("DOCUMENT"):].strip()
-            docs.setdefault(fn, {"nollm": None, "llm": None})["nollm"] = s
-        elif title.startswith("LOADSHEET"):
+        t = s["title"]
+        if t.startswith("DOCUMENT"):
+            docs.setdefault(t[len("DOCUMENT"):].strip(), {"stage": None})["stage"] = s
+        elif t.startswith("LOADSHEET"):
             loadsheet_stage = s
 
+    # Counts reflect exactly what is shown (the detected items are excluded).
     counts = {"PASS": 0, "FAIL": 0, "WARN": 0}
-    for s in report.get("stages", []):
-        for c in s["checks"]:
+    if loadsheet_stage:
+        for c in loadsheet_stage["checks"]:
             counts[c["status"]] = counts.get(c["status"], 0) + 1
 
-    reasons = "".join(f"<li>{e(r)}</li>" for r in report.get("reasons", []))
-    reasons_html = (f'<div class="why"><h3>Why this failed</h3><ul>{reasons}</ul></div>'
-                    if reasons else "")
-
-    # ---- Loadsheet tab ----
-    ls_block = _render_checks_block(loadsheet_stage, e, "No loadsheet stage in this report.")
-
-    # ---- Documents tab: a sidebar list + a pane per document with LLM/No-LLM sub-tabs ----
     doc_links, doc_panes = "", ""
     for i, (fn, parts) in enumerate(docs.items()):
-        all_checks = (parts["nollm"]["checks"] if parts["nollm"] else []) + \
-                     (parts["llm"]["checks"] if parts["llm"] else [])
-        doc_secs = sum((parts[k].get("elapsed", 0) if parts[k] else 0) for k in ("nollm", "llm"))
-        doc_time = _fmt_secs(doc_secs)
-        dc = _count_checks(all_checks)
-        dok = dc["FAIL"] == 0
-        badge = (f'<span class="dbadge fail">{dc["FAIL"]}</span>' if dc["FAIL"]
-                 else (f'<span class="dbadge warn">{dc["WARN"]}</span>' if dc["WARN"]
-                       else '<span class="dbadge ok">✓</span>'))
+        stage = parts["stage"] or {}
+        detected, checks = _split_detected(stage.get("checks", []))
+        for c in checks:
+            counts[c["status"]] = counts.get(c["status"], 0) + 1
+        cc = _count_checks(checks)
+        dok = cc["FAIL"] == 0
+        doc_secs = _fmt_secs(stage.get("elapsed", 0))
+        pill = (f'<span class="pill err">FAIL &times;{cc["FAIL"]}</span>' if cc["FAIL"]
+                else (f'<span class="pill warnp">WARN &times;{cc["WARN"]}</span>' if cc["WARN"]
+                      else '<span class="pill ok">&#10003; OK</span>'))
         active = " active" if i == 0 else ""
         doc_links += (f'<button class="doclink{active}" data-doc="{i}" onclick="showDoc({i})">'
-                      f'<span class="dl-ico {"ok" if dok else "bad"}">{"✓" if dok else "✗"}</span>'
-                      f'<span class="dl-txt"><span class="dl-num">Document {i + 1}'
-                      f'<span class="dl-time">⏱ {doc_time}</span></span>'
-                      f'<span class="dl-name">{e(fn)}</span></span>{badge}</button>')
+                      f'<span class="dl-ico {"ok" if dok else "bad"}">{"&#10003;" if dok else "&#10007;"}</span>'
+                      f'<span class="dl-txt"><span class="dl-num">Document {i + 1}</span>'
+                      f'<span class="dl-name">{e(fn)}</span></span>{pill}</button>')
+        doc_panes += (f'<section class="docpane{active}" data-doc="{i}">'
+                      f'<div class="dochead"><span class="dnum">Document {i + 1}</span>{pill}'
+                      f'<span class="dtime">&#9201; {doc_secs}</span>'
+                      f'<span class="dfile">{e(fn)}</span></div>'
+                      f'{_detected_panel(detected, e)}{_checks_table(checks, e)}</section>')
 
-        nollm_block = _render_checks_block(parts["nollm"], e,
-                                           "Deterministic document checks were not run.")
-        llm_block = _render_checks_block(parts["llm"], e,
-                                         "LLM checks were not run for this document "
-                                         "(run the bot without --no-llm to enable them).")
-        doc_panes += (
-            f'<section class="docpane{active}" data-doc="{i}">'
-            f'<div class="dochead"><h2>Document {i + 1}</h2><span class="docfile">{e(fn)}</span>'
-            f'<span class="doctime">⏱ processed in {doc_time}</span></div>'
-            f'<div class="subtabs">'
-            f'<button class="subtab active" onclick="showSub({i},\'nollm\',this)">No&nbsp;LLM &middot; deterministic</button>'
-            f'<button class="subtab" onclick="showSub({i},\'llm\',this)">LLM &middot; AI review</button>'
-            f'</div>'
-            f'<div class="subpane active" data-kind="nollm">{nollm_block}</div>'
-            f'<div class="subpane" data-kind="llm">{llm_block}</div>'
-            f'</section>')
+    docs_body = (f'<div class="docgrid"><nav class="doclist">{doc_links}</nav>'
+                 f'<div class="docmain">{doc_panes}</div></div>' if docs
+                 else '<p class="none" style="padding:16px 0">No documents were checked - the '
+                      'loadsheet was rejected before document validation could run.</p>')
 
-    if not docs:
-        docs_body = ('<p class="empty">No documents were checked — the loadsheet was '
-                     'rejected before document validation could run.</p>')
-    else:
-        docs_body = (f'<div class="docgrid"><nav class="doclist">{doc_links}</nav>'
-                     f'<div class="docmain">{doc_panes}</div></div>')
+    reasons = "".join(f"<li>{e(r)}</li>" for r in report.get("reasons", []))
+    why = (f'<div class="why"><h2 class="section">Why this failed</h2><ul>{reasons}</ul></div>'
+           if reasons else "")
+    ls_table = (_checks_table(loadsheet_stage["checks"], e) if loadsheet_stage
+                else '<p class="none">No loadsheet stage in this report.</p>')
 
-    banner_bg = ("linear-gradient(120deg,#137333,#34a853)" if ok
-                 else "linear-gradient(120deg,#b3261e,#ea4335)")
+    run_dt = time.strftime("%Y-%m-%d %H:%M:%S")
+    dur = _fmt_secs(report.get("elapsed_total", 0))
+    final_cls = "ok" if ok else "err"
+    final_txt = "Accepted &#10003;" if ok else "Rejected &#10007;"
+    next_action = ("Ready for the next workflow step" if ok
+                   else "Returned to originator &mdash; manual DC review required")
 
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Validation Report — {e(corr)}</title>
+<title>HxGN SDx Bot Execution Report &mdash; {e(corr)}</title>
 <style>
- *{{box-sizing:border-box}}
- body{{font-family:'Segoe UI',Roboto,Arial,sans-serif;margin:0;background:#eef1f4;color:#202124}}
- .wrap{{max-width:980px;margin:26px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 10px 34px rgba(0,0,0,.13)}}
- /* ---- header / hero ---- */
- .hero{{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between;padding:22px 28px;color:#fff;background:{banner_bg}}}
- .hero-l h1{{margin:0;font-size:23px;letter-spacing:.3px}}
- .hero-l p{{margin:6px 0 0;font-size:13px;opacity:.95;max-width:560px}}
- .hero-l .meta{{margin-top:10px;font-size:11.5px;opacity:.9;font-weight:600}}
- .hero-l .meta b{{font-weight:700}}
- .donut{{width:120px;height:120px;flex:0 0 120px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.18))}}
- .d-pct{{font:700 26px 'Segoe UI',Arial;fill:#fff}} .d-lab{{font:600 11px 'Segoe UI',Arial;fill:#fff;opacity:.92}}
- /* ---- summary cards ---- */
- .cards{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:20px 28px;background:#fafbfc;border-bottom:1px solid #e6e8eb}}
- .card{{border-radius:11px;padding:14px 16px;border:1px solid #e6e8eb;background:#fff;position:relative;overflow:hidden}}
- .card .n{{font-size:28px;font-weight:800;line-height:1}} .card .l{{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#5f6368;margin-top:5px}}
- .card::before{{content:"";position:absolute;left:0;top:0;bottom:0;width:5px}}
- .card.pass::before{{background:#1e8e3e}} .card.pass .n{{color:#1e8e3e}}
- .card.fail::before{{background:#d93025}} .card.fail .n{{color:#d93025}}
- .card.warn::before{{background:#f9ab00}} .card.warn .n{{color:#b06000}}
- .card.docs::before{{background:#1a73e8}} .card.docs .n{{color:#1a73e8}}
- /* ---- why-failed ---- */
- .why{{margin:18px 28px 0;background:#fce8e6;border-left:4px solid #d93025;border-radius:8px;padding:12px 16px}}
- .why h3{{margin:0 0 6px;font-size:11.5px;color:#c5221f;text-transform:uppercase;letter-spacing:.5px}}
- .why ul{{margin:0;padding-left:18px}} .why li{{font-size:13px;margin:4px 0}}
- /* ---- main tabs ---- */
- .tabbar{{display:flex;gap:8px;padding:18px 28px 0;border-bottom:1px solid #e6e8eb;align-items:center;flex-wrap:wrap}}
- .maintab{{appearance:none;border:0;background:none;cursor:pointer;font:700 14px 'Segoe UI',Arial;color:#5f6368;padding:10px 6px;border-bottom:3px solid transparent;display:flex;align-items:center;gap:8px}}
- .maintab .pill{{font-size:11px;font-weight:700;background:#eef0f2;color:#5f6368;border-radius:10px;padding:1px 8px}}
- .maintab.active{{color:#1a73e8;border-bottom-color:#1a73e8}}
- .maintab.active .pill{{background:#e8f0fe;color:#1a73e8}}
- .toggle{{margin-left:auto;font-size:12px;font-weight:600;color:#5f6368;cursor:pointer;user-select:none;padding-bottom:10px}}
- .mainpane{{display:none;padding:20px 28px 26px}} .mainpane.active{{display:block}}
- /* ---- check rows ---- */
- .ministats{{display:flex;gap:8px;margin:0 0 12px;flex-wrap:wrap}}
- .ms{{font-size:11.5px;font-weight:700;padding:4px 11px;border-radius:20px}}
- .ms.pass{{background:#e6f4ea;color:#1e8e3e}} .ms.fail{{background:#fce8e6;color:#d93025}} .ms.warn{{background:#fef7e0;color:#b06000}}
- .checks{{display:flex;flex-direction:column;gap:4px}}
- .check{{padding:9px 12px;border-radius:8px;border:1px solid #eceef0;background:#fff}}
- .crow{{display:flex;gap:10px;align-items:baseline}}
- .check.fail{{background:#fdeeed;border-color:#f6cfca}} .check.warn{{background:#fef8e7;border-color:#f5e2ad}}
- .check.pass{{background:#f6fbf7;border-color:#dcefe1}}
- .dot{{font-weight:800;width:16px;text-align:center;flex:0 0 16px}}
- .pass .dot{{color:#1e8e3e}} .fail .dot{{color:#d93025}} .warn .dot{{color:#b06000}}
- .cname{{font-weight:700;font-size:13px;color:#202124;flex:0 0 auto}}
- .cdet{{color:#5f6368;font-size:12px;word-break:break-word}}
- .evidence{{margin:10px 0 2px 26px;padding:8px;background:#fff;border:1px solid #e0e0e0;border-radius:9px;max-width:540px;box-shadow:0 2px 8px rgba(0,0,0,.06)}}
- .evidence img{{display:block;max-width:100%;height:auto;border-radius:5px}}
- .evidence figcaption{{font-size:11px;color:#5f6368;margin-top:6px;font-weight:600}}
- .check.fail .evidence{{border-color:#f3b4ae}}
- .empty{{font-size:13px;color:#80868b;background:#f8f9fa;border:1px dashed #dadce0;border-radius:8px;padding:16px;text-align:center}}
- body.only-issues .check.pass{{display:none}}
- /* ---- documents grid ---- */
- .docgrid{{display:grid;grid-template-columns:262px 1fr;gap:20px}}
- .doclist{{display:flex;flex-direction:column;gap:6px}}
- .doclink{{display:flex;align-items:center;gap:10px;text-align:left;cursor:pointer;border:1px solid #e6e8eb;background:#fff;border-radius:10px;padding:9px 11px;font:inherit}}
- .doclink:hover{{background:#f8f9fa}}
- .doclink.active{{border-color:#1a73e8;background:#e8f0fe;box-shadow:0 0 0 1px #1a73e8 inset}}
- .dl-ico{{font-weight:800;width:18px;text-align:center}} .dl-ico.ok{{color:#1e8e3e}} .dl-ico.bad{{color:#d93025}}
+ *{{margin:0;padding:0;box-sizing:border-box}}
+ body{{font-family:'Segoe UI',sans-serif;background:#f5f5f5;padding:32px;color:#333}}
+ .report{{max-width:1080px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1);overflow:hidden}}
+ .header{{background:#003b5c;color:#fff;padding:24px 32px}}
+ .header h1{{font-size:22px;margin-bottom:4px}} .header .sub{{font-size:14px;opacity:.8}}
+ .meta{{padding:20px 32px;background:#f0f4f8;display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:14px}}
+ .meta .label{{font-weight:600;color:#666}}
+ .summary{{display:flex;gap:12px;padding:18px 32px 4px;flex-wrap:wrap}}
+ .stat{{flex:1;min-width:120px;border:1px solid #e0e0e0;border-left-width:5px;border-radius:6px;padding:12px 16px}}
+ .stat .n{{font-size:26px;font-weight:800;line-height:1}}
+ .stat .l{{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#666;margin-top:4px}}
+ .stat.p{{border-left-color:#2e7d32}} .stat.p .n{{color:#2e7d32}}
+ .stat.f{{border-left-color:#c62828}} .stat.f .n{{color:#c62828}}
+ .stat.w{{border-left-color:#f9a825}} .stat.w .n{{color:#b06000}}
+ .stat.d{{border-left-color:#00a3e0}} .stat.d .n{{color:#0077a3}}
+ .content{{padding:12px 32px 24px}}
+ h2.section{{font-size:17px;color:#003b5c;margin:24px 0 4px}}
+ .section-sub{{font-size:13px;color:#666;margin-bottom:8px}}
+ .gate{{font-size:11px;background:#003b5c;color:#fff;border-radius:10px;padding:2px 9px;vertical-align:middle;margin-left:6px;letter-spacing:.5px}}
+ table{{width:100%;border-collapse:collapse;margin-top:10px}}
+ th{{background:#003b5c;color:#fff;padding:9px 12px;text-align:left;font-size:12px;text-transform:uppercase}}
+ td{{padding:9px 12px;border-bottom:1px solid #e6e6e6;font-size:13px;vertical-align:top}}
+ td.num{{color:#999;width:34px}} td.step{{font-weight:600;width:230px}} td.notes{{color:#555}}
+ td.shot{{width:130px;text-align:center}}
+ tr:hover td{{background:#f9f9f9}}
+ .pass{{color:#2e7d32;font-weight:700}} .fail{{color:#c62828;font-weight:700}} .warn{{color:#b06000;font-weight:700}}
+ tr.row-fail td{{background:#fdeeed}} tr.row-warn td{{background:#fef8e7}}
+ tr.row-fail:hover td{{background:#fbe3e0}} tr.row-warn:hover td{{background:#fdf2d4}}
+ .pill{{font-size:11px;font-weight:800;border-radius:10px;padding:2px 9px;white-space:nowrap}}
+ .pill.ok{{background:#e6f4ea;color:#2e7d32}} .pill.err{{background:#fce8e6;color:#c62828}} .pill.warnp{{background:#fef7e0;color:#b06000}}
+ .thumb{{max-width:104px;max-height:68px;border:1px solid #cfd8dc;border-radius:4px;cursor:zoom-in;transition:transform .1s;margin:2px}}
+ .thumb:hover{{transform:scale(1.04);border-color:#00a3e0}}
+ .none{{color:#bbb}}
+ .why{{margin:20px 0 0;background:#fce8e6;border-left:5px solid #c62828;border-radius:6px;padding:8px 18px 14px}}
+ .why h2.section{{color:#c62828;margin-top:8px}} .why ul{{margin:4px 0 0 18px}} .why li{{font-size:13px;margin:4px 0}}
+ /* ---- document navigator (list on the left, detail on the right) ---- */
+ .docgrid{{display:grid;grid-template-columns:262px 1fr;border:1px solid #e0e6ea;border-radius:8px;overflow:hidden;margin-top:10px}}
+ .doclist{{display:flex;flex-direction:column;background:#f0f4f8;border-right:1px solid #e0e6ea;max-height:660px;overflow:auto}}
+ .doclink{{display:flex;align-items:center;gap:9px;text-align:left;cursor:pointer;border:0;border-bottom:1px solid #e3e9ee;background:none;padding:11px 13px;font:inherit;color:#333}}
+ .doclink:hover{{background:#e7eef4}}
+ .doclink.active{{background:#fff;box-shadow:inset 4px 0 0 #00a3e0}}
+ .dl-ico{{font-weight:800;width:16px;text-align:center}} .dl-ico.ok{{color:#2e7d32}} .dl-ico.bad{{color:#c62828}}
  .dl-txt{{display:flex;flex-direction:column;min-width:0;flex:1}}
- .dl-num{{font-size:12.5px;font-weight:800;color:#202124;display:flex;align-items:center;gap:6px}}
- .dl-time{{font-size:10.5px;font-weight:700;color:#5f6368;background:#eef0f2;border-radius:9px;padding:1px 7px}}
- .dl-name{{font-size:10.5px;color:#5f6368;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
- .dbadge{{font-size:11px;font-weight:800;min-width:22px;text-align:center;border-radius:11px;padding:2px 7px}}
- .dbadge.fail{{background:#d93025;color:#fff}} .dbadge.warn{{background:#f9ab00;color:#3c2b00}} .dbadge.ok{{background:#e6f4ea;color:#1e8e3e}}
+ .dl-num{{font-size:12.5px;font-weight:800;color:#003b5c}}
+ .dl-name{{font-size:10.5px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+ .docmain{{min-width:0}}
  .docpane{{display:none}} .docpane.active{{display:block}}
- .dochead{{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}}
- .dochead h2{{margin:0;font-size:18px}} .docfile{{font-size:12px;color:#5f6368;font-weight:600;word-break:break-all}}
- .doctime{{font-size:11.5px;font-weight:700;color:#1a73e8;background:#e8f0fe;border-radius:11px;padding:2px 10px}}
- .subtabs{{display:inline-flex;background:#eef0f2;border-radius:10px;padding:4px;gap:4px;margin-bottom:16px}}
- .subtab{{appearance:none;border:0;background:none;cursor:pointer;font:700 12.5px 'Segoe UI',Arial;color:#5f6368;padding:7px 16px;border-radius:7px}}
- .subtab.active{{background:#fff;color:#1a73e8;box-shadow:0 1px 3px rgba(0,0,0,.14)}}
- .subpane{{display:none}} .subpane.active{{display:block}}
- @media(max-width:720px){{.cards{{grid-template-columns:repeat(2,1fr)}}.docgrid{{grid-template-columns:1fr}}}}
+ .dochead{{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f0f4f8;padding:12px 16px;font-size:15px;color:#003b5c;border-bottom:1px solid #e0e6ea}}
+ .dochead .dnum{{font-weight:800}}
+ .dochead .dtime{{font-size:12px;font-weight:700;color:#0077a3;background:#e2f2fa;border-radius:10px;padding:2px 9px}}
+ .dochead .dfile{{font-size:12px;color:#666;font-weight:600;word-break:break-all}}
+ .docpane table{{margin:0}}
+ .detected{{padding:12px 16px;background:#f7fbfd;border-bottom:1px solid #e0e6ea}}
+ .det-title{{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#0077a3;margin-bottom:8px}}
+ .det-item{{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px}}
+ .det-ico{{font-weight:800;width:16px;text-align:center}} .det-ico.yes{{color:#2e7d32}} .det-ico.no{{color:#bbb}}
+ .det-label{{font-weight:600;color:#333;min-width:190px}}
+ .det-val{{color:#555}} .det-val.none{{color:#bbb}}
+ .det-item .thumb{{margin-left:auto}}
+ .footer{{padding:20px 32px;background:#f0f4f8;border-top:2px solid #003b5c;font-size:14px}}
+ .footer .final-status{{font-size:18px;font-weight:700;margin-bottom:8px}}
+ .footer .final-status.ok{{color:#2e7d32}} .footer .final-status.err{{color:#c62828}}
+ .lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:999;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}}
+ .lb img{{max-width:96%;max-height:92%;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,.6)}}
+ .lb .hint{{position:fixed;top:16px;right:24px;color:#fff;font-size:13px;opacity:.8}}
+ @media(max-width:760px){{.meta{{grid-template-columns:1fr}}.docgrid{{grid-template-columns:1fr}}.doclist{{max-height:none}}}}
 </style></head>
 <body>
-<div class="wrap">
- <div class="hero">
-   <div class="hero-l">
-     <h1>{'✓ VALIDATION PASSED' if ok else '✗ VALIDATION FAILED'}</h1>
-     <p>{e(report.get('headline', ''))}</p>
-     <div class="meta"><b>Loadsheet:</b> {e(report.get('loadsheet', ''))} &nbsp;&middot;&nbsp; <b>Transmittal:</b> {e(corr)} &nbsp;&middot;&nbsp; <b>Total time:</b> ⏱ {_fmt_secs(report.get('elapsed_total', 0))}</div>
+ <div class="report">
+   <div class="header">
+     <h1>HxGN SDx Bot Execution Report</h1>
+     <div class="sub">Venture Global &mdash; Document Control Automation</div>
    </div>
-   {_donut_svg(counts['PASS'], counts['FAIL'], counts['WARN'])}
+   <div class="meta">
+     <div><span class="label">Run Date &amp; Time:</span> {e(run_dt)}</div>
+     <div><span class="label">Duration:</span> {e(dur)}</div>
+     <div><span class="label">Bot User:</span> dc_bot</div>
+     <div><span class="label">Transmittal:</span> {e(corr)}</div>
+     <div><span class="label">Loadsheet:</span> {e(report.get('loadsheet',''))}</div>
+     <div><span class="label">Documents Processed:</span> {len(docs)}</div>
+   </div>
+   <div class="summary">
+     <div class="stat f"><div class="n">{counts['FAIL']}</div><div class="l">Issues</div></div>
+     <div class="stat w"><div class="n">{counts['WARN']}</div><div class="l">Warnings</div></div>
+     <div class="stat p"><div class="n">{counts['PASS']}</div><div class="l">Passed checks</div></div>
+     <div class="stat d"><div class="n">{len(docs)}</div><div class="l">Documents</div></div>
+   </div>
+   <div class="content">
+     {why}
+     <h2 class="section">Stage&nbsp;1 &middot; Loadsheet Validation <span class="gate">GATE</span></h2>
+     <p class="section-sub">The loadsheet is validated first. If it fails, document processing does not run.</p>
+     {ls_table}
+     <h2 class="section">Stage&nbsp;2 &middot; Document Validation</h2>
+     <p class="section-sub">Pick a document on the left to see its checks. Click any thumbnail to enlarge.</p>
+     {docs_body}
+   </div>
+   <div class="footer">
+     <div class="final-status {final_cls}">Final Status: {final_txt}</div>
+     <div>Next Action: {next_action}</div>
+   </div>
  </div>
- <div class="cards">
-   <div class="card fail"><div class="n">{counts['FAIL']}</div><div class="l">Issues</div></div>
-   <div class="card warn"><div class="n">{counts['WARN']}</div><div class="l">Warnings</div></div>
-   <div class="card pass"><div class="n">{counts['PASS']}</div><div class="l">Passed checks</div></div>
-   <div class="card docs"><div class="n">{len(docs)}</div><div class="l">Documents</div></div>
+ <div class="lb" id="lb" onclick="this.style.display='none'">
+   <span class="hint">click anywhere to close</span>
+   <img id="lbimg" src="" alt="evidence">
  </div>
- {reasons_html}
- <div class="tabbar">
-   <button class="maintab active" onclick="showMain('pane-loadsheet',this)">Loadsheet
-     <span class="pill">{len(loadsheet_stage['checks']) if loadsheet_stage else 0}</span></button>
-   <button class="maintab" onclick="showMain('pane-docs',this)">Documents
-     <span class="pill">{len(docs)}</span></button>
-   <label class="toggle"><input type="checkbox" onchange="document.body.classList.toggle('only-issues',this.checked)"> Show only issues</label>
- </div>
- <div id="pane-loadsheet" class="mainpane active">{ls_block}</div>
- <div id="pane-docs" class="mainpane">{docs_body}</div>
-</div>
-<script>
- function showMain(id, btn){{
-   document.querySelectorAll('.mainpane').forEach(function(p){{p.classList.remove('active');}});
-   document.getElementById(id).classList.add('active');
-   document.querySelectorAll('.maintab').forEach(function(t){{t.classList.remove('active');}});
-   btn.classList.add('active');
- }}
- function showDoc(idx){{
-   document.querySelectorAll('.docpane').forEach(function(p){{p.classList.remove('active');}});
-   document.querySelector('.docpane[data-doc="'+idx+'"]').classList.add('active');
-   document.querySelectorAll('.doclink').forEach(function(t){{t.classList.remove('active');}});
-   document.querySelector('.doclink[data-doc="'+idx+'"]').classList.add('active');
- }}
- function showSub(idx, kind, btn){{
-   var pane = document.querySelector('.docpane[data-doc="'+idx+'"]');
-   pane.querySelectorAll('.subpane').forEach(function(p){{p.classList.remove('active');}});
-   pane.querySelector('.subpane[data-kind="'+kind+'"]').classList.add('active');
-   pane.querySelectorAll('.subtab').forEach(function(t){{t.classList.remove('active');}});
-   btn.classList.add('active');
- }}
-</script>
+ <script>
+   function openLb(src){{document.getElementById('lbimg').src=src;document.getElementById('lb').style.display='flex';}}
+   function showDoc(idx){{
+     document.querySelectorAll('.docpane').forEach(function(p){{p.classList.remove('active');}});
+     document.querySelector('.docpane[data-doc="'+idx+'"]').classList.add('active');
+     document.querySelectorAll('.doclink').forEach(function(t){{t.classList.remove('active');}});
+     document.querySelector('.doclink[data-doc="'+idx+'"]').classList.add('active');
+   }}
+   document.addEventListener('keydown',function(ev){{if(ev.key==='Escape')document.getElementById('lb').style.display='none';}});
+ </script>
 </body></html>"""
+
 
 
 def save_report(report: dict, corr: str) -> str:
@@ -468,6 +469,9 @@ def review_row(page, tr, use_llm: bool) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Headed bot: drive the frontend, validate, report.")
     ap.add_argument("--no-llm", action="store_true", help="force deterministic-only (skip Claude)")
+    ap.add_argument("--defective", action="store_true",
+                    help="review ONLY the defective CP transmittal (the -INVALID row); "
+                         "by default only the two valid transmittals are reviewed")
     args = ap.parse_args()
 
     load_env_file()
@@ -488,14 +492,22 @@ def main() -> int:
         page.wait_for_selector(".data-table tbody tr")
         page.evaluate("() => window.botApi && window.botApi.reset()")
 
-        # Find the demo transmittal rows (pass + fake).
+        # Pick the demo transmittal rows. --defective reviews ONLY the defective
+        # CP (-INVALID) row; without it, ONLY the two valid transmittals.
+        print("Rows:", "the defective CP transmittal only (--defective)" if args.defective
+              else "the 2 valid transmittals only (pass --defective to run the defective CP row instead)")
         rows = page.locator(".data-table tbody tr")
         targets = []
         for i in range(rows.count()):
-            if DEMO_MARKER in rows.nth(i).locator("td.corr-no-cell").inner_text():
+            corr = rows.nth(i).locator("td.corr-no-cell").inner_text()
+            if DEMO_MARKER not in corr:
+                continue
+            is_defective = any(mark in corr.upper() for mark in DEFECTIVE_MARKERS)
+            if is_defective == args.defective:  # defective mode -> only defective; else only valid
                 targets.append(i)
         if not targets:
-            print("No demo rows found (looking for", DEMO_MARKER + "). Is C2 PROJECT selected?")
+            print("No matching demo rows found (looking for", DEMO_MARKER,
+                  "with --defective" if args.defective else "without --defective", "). Is C2 PROJECT selected?")
         for i in targets:
             review_row(page, rows.nth(i), use_llm)
 

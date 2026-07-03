@@ -119,10 +119,11 @@
                           <span class="report-check-name">{{ c.name }}</span>
                           @if (c.detail) { <span class="report-check-detail">{{ c.detail }}</span> }
                         </div>
-                        @if (c.snippet) {
+                        @if (c.snippet || c.snippets?.length) {
                           <figure class="report-evidence">
-                            <img [src]="c.snippet" alt="evidence from document" />
-                            <figcaption>{{ c.status === 'PASS' ? 'Found in document (highlighted)' : 'Document shows this (highlighted) — does not match loadsheet' }}</figcaption>
+                            @if (c.snippet) { <img [src]="c.snippet" alt="evidence from document" /> }
+                            @for (s of c.snippets; track s) { <img [src]="s" alt="logo / seal from document" /> }
+                            <figcaption>{{ state.evidenceCaption(c) }}</figcaption>
                           </figure>
                         }
                       </div>

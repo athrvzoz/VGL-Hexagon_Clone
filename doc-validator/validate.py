@@ -76,7 +76,8 @@ class Check:
     name: str
     status: str
     detail: str = ""
-    snippet: str = ""  # data-URL PNG: cropped+highlighted region of the PDF
+    snippet: str = ""  # data-URL PNG: one cropped+highlighted region of the PDF
+    snippets: list[str] = field(default_factory=list)  # several crops (e.g. every logo/seal image)
 
 
 @dataclass
@@ -85,8 +86,9 @@ class Result:
     checks: list[Check] = field(default_factory=list)
     elapsed: float = 0.0  # seconds spent processing this stage/document
 
-    def add(self, name: str, status: str, detail: str = "", snippet: str = "") -> None:
-        self.checks.append(Check(name, status, detail, snippet))
+    def add(self, name: str, status: str, detail: str = "", snippet: str = "",
+            snippets: list[str] | None = None) -> None:
+        self.checks.append(Check(name, status, detail, snippet, snippets or []))
 
     @property
     def ok(self) -> bool:
@@ -241,20 +243,29 @@ def ocr_available() -> bool:
     return _OCR_READY
 
 
-def image_text_not_selectable(page) -> list[tuple[str, str]]:
-    """OCR every embedded image on the page (logos included) and return
-    (sample, snippet) for each one whose OCR'd words are NOT present in the
-    selectable text AT THE IMAGE'S OWN LOCATION - i.e. the text is drawn into the
-    picture rather than being real, selectable text where it appears. Words that
-    happen to be selectable elsewhere on the page do NOT excuse it. `sample` is a
-    short OCR excerpt; `snippet` is a data-URL PNG of the image region (so the
-    report can show it). Only degenerate sub-icon images are skipped. Needs Tesseract."""
+def scan_page_logo_images(page, seen_xrefs: set | None = None) -> list[dict]:
+    """OCR every raster image on the page that carries text (logos, stamps, seals)
+    and return one entry per image so the report can SHOW the logo and say whether
+    its text is selectable. The test is POSITIONAL: an image's text counts as
+    selectable only when the same words exist in the selectable text layer AT THE
+    IMAGE'S OWN LOCATION. Text that happens to be selectable elsewhere on the page
+    does NOT excuse a logo/stamp whose text is baked into the picture where it sits.
+    Each entry has:
+        snippet    - a data-URL PNG crop of the logo (green box if its text is
+                     selectable there, red box if it is not)
+        sample     - a short excerpt of the text read out of the image
+        selectable - True if the image's text is real text at that location
+    Images with no readable text (plain graphics) and degenerate sub-icons are
+    skipped. Needs Tesseract."""
     import io
     import pytesseract
     from PIL import Image
 
     page_area = (page.rect.width * page.rect.height) or 1.0
-    hits, seen = [], set()
+    # `seen` is shared across pages so a logo repeated in every page header is
+    # cropped and reported only once, not once per page.
+    seen = seen_xrefs if seen_xrefs is not None else set()
+    out = []
     for img in page.get_images(full=True):
         xref = img[0]
         if xref in seen:
@@ -274,23 +285,95 @@ def image_text_not_selectable(page) -> list[tuple[str, str]]:
                 continue
             ocr_words = re.findall(r"[A-Za-z0-9]{3,}", ocr)
             if not ocr_words:
-                continue
-            # selectable text physically WITHIN this image's box (positional check)
+                continue  # a plain graphic with no text - not a text-bearing logo/seal
+            # POSITIONAL check: only the selectable text physically inside this
+            # image's box counts (words selectable elsewhere on the page do not).
             here = set(re.findall(r"[a-z0-9]{3,}", page.get_text("text", clip=r).lower()))
             missing = {w.lower() for w in ocr_words if w.lower() not in here}
-            if len(missing) >= OCR_MIN_MISSING_WORDS:
-                sample = re.sub(r"\s+", " ", ocr).strip()[:80]
-                # highlight the offending image: red box around it + a little context
-                try:
-                    page.draw_rect(r, color=(0.85, 0.16, 0.13), width=2.0)
-                    clip = fitz.Rect(r.x0 - 40, r.y0 - 30, r.x1 + 40, r.y1 + 30) & page.rect
-                    snip_png = page.get_pixmap(clip=clip, dpi=150).tobytes("png")
-                except Exception:
-                    snip_png = png  # fall back to the plain crop
-                snippet = "data:image/png;base64," + base64.b64encode(snip_png).decode()
-                hits.append((sample, snippet))
-                break  # one finding per image is enough
-    return hits
+            selectable = len(missing) < OCR_MIN_MISSING_WORDS
+            color = (0.12, 0.56, 0.24) if selectable else (0.85, 0.16, 0.13)
+            try:
+                page.draw_rect(r, color=color, width=2.0)
+                clip = fitz.Rect(r.x0 - 40, r.y0 - 30, r.x1 + 40, r.y1 + 30) & page.rect
+                snip_png = page.get_pixmap(clip=clip, dpi=150).tobytes("png")
+            except Exception:
+                snip_png = png  # fall back to the plain crop
+            out.append({"snippet": "data:image/png;base64," + base64.b64encode(snip_png).decode(),
+                        "sample": re.sub(r"\s+", " ", ocr).strip()[:80],
+                        "selectable": selectable})
+            break  # one crop per image is enough
+    return out
+
+
+# Show at most this many logo/seal crops in the report (keeps it from ballooning).
+LOGO_EVIDENCE_CAP = 8
+
+
+def _add_images_ocrd_check(res: Result, logo_images: list[tuple],
+                           scanned_note: str | None = None, ocr_on: bool = True) -> None:
+    """Add the one deterministic (non-AI) 'Images are OCR'd' check. This is the
+    images side of things, found purely with PyMuPDF get_images() / the .docx
+    media parts (no LLM): it flags image-only/scanned pages that have no text
+    layer AND OCRs every embedded raster image (company logos etc.), showing a
+    crop of each and reporting whether its text is selectable. Logos, stamps and
+    seals that are drawn as vectors (which get_images() cannot see) are handled
+    separately by the AI 'Logos & seals (AI)' check.
+
+    `logo_images` is a list of (page_label, entry) with 'snippet','sample',
+    'selectable'; `scanned_note` describes any image-only pages (FAIL); `ocr_on`
+    is False when Tesseract is unavailable so the wording stays honest."""
+    crops = [e["snippet"] for _, e in logo_images][:LOGO_EVIDENCE_CAP]
+    bad = [(p, e) for p, e in logo_images if not e["selectable"]]
+    n = len(logo_images)
+    if scanned_note:
+        detail = scanned_note
+        if bad:
+            detail += f" Also, {len(bad)} embedded image(s) have text baked into the picture that isn't selectable."
+        res.add("Images are OCR'd", FAIL, detail, snippets=crops)
+        return
+    if bad:
+        examples = "; ".join((f"page {p}: " if p else "") + f"“{e['sample']}”" for p, e in bad[:3])
+        if len(bad) == n:
+            who, verb = ("the embedded image", "has") if n == 1 else (f"all {n} embedded images", "have")
+        else:
+            who, verb = (f"{len(bad)} of the {n} embedded images", "has" if len(bad) == 1 else "have")
+        res.add("Images are OCR'd", WARN,
+                f"Every page has a text layer, but {who} (logos etc.) {verb} text baked into the picture "
+                f"that can't be selected or searched - it should be OCR'd. For example: {examples}.",
+                snippets=crops)
+        return
+    if not ocr_on:
+        res.add("Images are OCR'd", PASS,
+                "No scanned/image-only pages. (The embedded-image OCR was skipped because Tesseract "
+                "is not installed.)")
+        return
+    have_txt = ("the 1 embedded image has" if n == 1 else f"all {n} embedded images have")
+    res.add("Images are OCR'd", PASS,
+            (f"No scanned/image-only pages, and {have_txt} selectable text - nothing needs OCR." if n
+             else "No scanned/image-only pages, and no embedded images that need OCR."),
+            snippets=crops)
+
+
+def security_classification_check(row: dict, crop_fn=None) -> Check | None:
+    """Deterministic 'Security Classification' item, or None when the loadsheet
+    does not assert one for this document (most documents have no security
+    classification). Searches the document's own text for the classification value
+    the loadsheet gives (e.g. 'Company Use' for the VG documents, 'Confidential'
+    for CP-139000-ICS-DAS-01821-00086) and, for PDFs, crops+highlights where it
+    was found. Surfaced in the report as a 'detected' item, like the diagram /
+    contract numbers - no LLM involved."""
+    sec = (row.get("Security Classification") or "").strip()
+    if norm(sec) == "":
+        return None  # this document carries no security classification
+    # We do NOT guess the value deterministically: a classification block lists
+    # every option (Company Use / Confidential / Public / ...) and the selected one
+    # is a ticked box that text search cannot read reliably. So we only crop the
+    # section as evidence and leave identifying the ticked option to the AI check.
+    snip = crop_fn(sec) if crop_fn else ""
+    return Check("Security Classification", WARN,
+                 f"loadsheet={sec!r} | document='(none found)' - the security classification is read "
+                 f"by the AI check from the highlighted section (not determined deterministically)",
+                 snip)
 
 
 def revision_history_numbers(text: str) -> list[int]:
@@ -338,6 +421,56 @@ def crop_highlight(doc, needle: str, status: str) -> str:
         r = rects[0]
         clip = fitz.Rect(r.x0 - 48, r.y0 - 30, r.x1 + 48, r.y1 + 30) & page.rect
         pix = page.get_pixmap(clip=clip, dpi=160)
+        return "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
+    return ""
+
+
+# Classification options that may appear as tick-boxes in a security-classification block.
+SECURITY_OPTIONS = ["Company Use", "Confidential", "Public", "Restricted", "Proprietary",
+                    "Internal Use", "Secret", "Unrestricted"]
+
+
+def crop_security_section(doc, value: str = "", highlight: bool = True) -> str:
+    """Crop the WHOLE security-classification block - the section that holds the
+    tick-boxes (e.g. COMPANY USE / CONFIDENTIAL / PUBLIC / RESTRICTED) - so the
+    reviewer (and the AI check) can see which box is ticked. With highlight=True
+    the section is outlined in green (for the report evidence); with highlight=False
+    a CLEAN crop is returned (fed to the LLM so nothing obscures the tick-boxes).
+    Returns a data-URL PNG, or '' if no 'Security Classification' block is found."""
+    val = (value or "").strip()
+    variants = [v for v in {val, val.upper(), val.lower(), val.title()} if v]
+    for pno in range(doc.page_count):
+        page = doc[pno]
+        try:
+            heads = page.search_for("Security Classification")
+        except Exception:
+            heads = []
+        if not heads:
+            continue
+        anchor = heads[0]
+        lo, hi = anchor.y0 - 6, anchor.y0 + 270  # heading + the tick-box list below it
+        rects = [r for r in heads if lo <= r.y0 <= hi]
+        for term in SECURITY_OPTIONS + variants:
+            try:
+                rects += [r for r in page.search_for(term) if lo <= r.y0 <= hi]
+            except Exception:
+                pass
+        if not rects:
+            rects = [anchor]
+        x0 = min(r.x0 for r in rects); y0 = min(r.y0 for r in rects)
+        x1 = max(r.x1 for r in rects); y1 = max(r.y1 for r in rects)
+        section = fitz.Rect(x0 - 6, y0 - 8, x1 + 6, y1 + 8) & page.rect
+        if highlight:
+            page.draw_rect(section, color=(0.12, 0.56, 0.24), width=1.4)   # outline whole section
+            for term in variants:                                          # emphasise the matched value
+                try:
+                    for r in page.search_for(term):
+                        if lo <= r.y0 <= hi:
+                            page.draw_rect(r, color=(0.90, 0.55, 0.0), width=1.6)
+                except Exception:
+                    pass
+        clip = fitz.Rect(section.x0 - 18, section.y0 - 14, section.x1 + 18, section.y1 + 14) & page.rect
+        pix = page.get_pixmap(clip=clip, dpi=200 if not highlight else 160)
         return "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
     return ""
 
@@ -443,7 +576,6 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     overlap_pages, overflow_pages = [], []
     orientations, markups = [], []
     full_text_parts = []
-    img_text_hits = []  # (page_no, ocr_sample) for images holding non-selectable text
     ocr_ready = ocr_available()
 
     for pno in range(n):
@@ -463,12 +595,6 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             pages_not_ocrd.append(pno + 1)
         if not has_text:
             pages_no_text.append(pno + 1)
-
-        # Text printed inside an image that is NOT in the selectable text layer
-        # (e.g. a scanned note/figure). OCR only sizeable images; logos are skipped.
-        if ocr_ready and has_img:
-            for sample, snippet in image_text_not_selectable(page):
-                img_text_hits.append((pno + 1, sample, snippet))
 
         # Geometry: overlapping text blocks and content spilling off the page.
         blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
@@ -491,36 +617,36 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     # --- searchable / selectable text ---
     n_with_text = n - len(pages_no_text)
     if n_with_text == n:
-        res.add("text searchable / selectable", PASS, f"all {n} pages have a text layer")
+        res.add("text searchable / selectable", PASS,
+                f"All {n} page(s) have selectable text you can search and copy.")
     elif n_with_text == 0:
-        res.add("text searchable / selectable", FAIL, "no extractable text on any page")
+        res.add("text searchable / selectable", FAIL,
+                "None of the pages have selectable text - the whole document reads as an image.")
     else:
         res.add("text searchable / selectable", FAIL,
-                f"{len(pages_no_text)}/{n} pages have no text: {pages_no_text[:10]}")
+                f"{len(pages_no_text)} of {n} page(s) have no selectable text (page {pages_no_text[:10]}).")
 
-    # --- OCR ---
-    res.add("images are OCR'd", FAIL if pages_not_ocrd else PASS,
-            f"image-only pages with no text layer: {pages_not_ocrd[:10]}" if pages_not_ocrd
-            else "no un-OCR'd image pages")
-
-    # --- text inside images is selectable (Tesseract; skipped if not installed) ---
-    # Catches the case the page-level OCR check cannot: a page that HAS a text
-    # layer but also embeds a picture (a scanned note/figure) carrying its own
-    # text that is not selectable/searchable. Advisory WARN - OCR is imperfect.
+    # --- images are OCR'd (DETERMINISTIC, non-AI) ---
+    # Two things, both found without the LLM: (1) image-only / scanned pages that
+    # have no text layer, and (2) every embedded raster image (found via PyMuPDF
+    # get_images() - company logos etc.) whose text is not selectable AT ITS OWN
+    # LOCATION (text that appears elsewhere on the page does not excuse a baked-in
+    # logo). A crop of each embedded image is shown. Logos / stamps / seals drawn
+    # as vectors (which get_images() cannot see) are handled separately by the AI
+    # 'Logos & seals' check.
+    logo_images = []
     if ocr_ready:
-        if img_text_hits:
-            ex = "; ".join(f"p{p} text not selectable, e.g. {s!r}" for p, s, _ in img_text_hits[:3])
-            res.add("Text inside images is selectable", WARN,
-                    f"{len(img_text_hits)} image(s) carry text missing from the page text layer "
-                    f"(should be OCR'd / made selectable): {ex}",
-                    img_text_hits[0][2])  # show the first offending image as evidence
-        else:
-            res.add("Text inside images is selectable", PASS,
-                    "no image carries text that is absent from the selectable text layer")
+        seen_xrefs: set = set()
+        logo_images = [(pno + 1, e) for pno in range(n)
+                       for e in scan_page_logo_images(doc[pno], seen_xrefs)]
+    scanned = (f"{len(pages_not_ocrd)} page(s) are just a scanned image with no text behind them "
+               f"(page {pages_not_ocrd[:10]}) - they need to be OCR'd." if pages_not_ocrd else None)
+    _add_images_ocrd_check(res, logo_images, scanned_note=scanned, ocr_on=ocr_ready)
 
     # --- blank pages ---
     res.add("no blank pages", FAIL if pages_blank else PASS,
-            f"blank pages: {pages_blank[:10]}" if pages_blank else f"0 of {n} blank")
+            f"Found {len(pages_blank)} blank page(s) (page {pages_blank[:10]})." if pages_blank
+            else f"No blank pages - all {n} page(s) have content.")
 
     # --- alignment / overlap ---
     # Block-level geometry from PyMuPDF over-reports on genuine engineering
@@ -528,22 +654,26 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     # these are advisory WARNs. The authoritative visual alignment verdict comes
     # from the LLM layer when it is enabled.
     res.add("no overlapping text", WARN if overlap_pages else PASS,
-            f"possible overlap on: {', '.join(overlap_pages[:10])}" if overlap_pages else "no overlapping text blocks")
+            f"Some text blocks may overlap on page(s): {', '.join(overlap_pages[:10])} "
+            f"(often just dense tables or line-art - worth a quick look)." if overlap_pages
+            else "No overlapping text blocks - the layout looks clean.")
     res.add("content within page bounds", WARN if overflow_pages else PASS,
-            f"content may spill off page on: {overflow_pages[:10]}" if overflow_pages else "aligned within margins")
+            f"Content may run past the page edge on page {overflow_pages[:10]} - worth a quick look."
+            if overflow_pages else "All content sits inside the page margins.")
 
     # --- page orientation (first page sets the expected orientation; any later
     #     page that differs is a failure) ---
     expected = orientations[0] if orientations else "portrait"
     bad_ori = [i + 1 for i, o in enumerate(orientations) if o != expected]
     res.add("Page orientation consistent", FAIL if bad_ori else PASS,
-            f"first page is {expected}, but page(s) {bad_ori} differ" if bad_ori
-            else f"all {n} page(s) {expected}")
+            f"The document starts {expected}, but page {bad_ori} switch orientation." if bad_ori
+            else f"All {n} page(s) are {expected} - orientation is consistent.")
 
     # --- no markups / review annotations present ---
     res.add("No markups present on document", WARN if markups else PASS,
-            f"{len(markups)} markup(s): " + ", ".join(f"{k} (p{p})" for p, k in markups[:10])
-            if markups else "no markups")
+            f"Found {len(markups)} review markup(s) still on the document: "
+            + ", ".join(f"{k} (page {p})" for p, k in markups[:10]) if markups
+            else "No review markups or comments left on the document.")
 
     # --- document number legible in every page's title block ---
     # Outcomes per page: clean exact match; present-but-garbled (the number is
@@ -578,7 +708,7 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     exp = f"expected {doc_no_meta!r}"
     if not pages_mangled and not pages_missing and not pages_suffixed:
         res.add("Document metadata legible on each page", PASS,
-                f"{exp}; present and clean (exact match) on all {n} page(s)")
+                f"The document number {doc_no_meta!r} is printed clearly on all {n} page(s).")
     else:
         notes = [exp]
         if pages_suffixed:
@@ -600,26 +730,38 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     #     no revision-history table at all is acceptable ---
     revs_hist = revision_history_numbers(full_text)
     if len(revs_hist) < 2:
-        res.add("Revision history is complete", PASS, "no multi-row revision history found -> OK")
+        res.add("Revision history is complete", PASS,
+                "No multi-row revision history to check - nothing missing.")
     else:
         lo, hi = min(revs_hist), max(revs_hist)
         gap = [x for x in range(lo, hi + 1) if x not in set(revs_hist)]
         res.add("Revision history is complete", WARN if gap else PASS,
-                f"history lists {sorted(set(revs_hist), reverse=True)}, missing revision(s) {gap}" if gap
-                else f"complete - revisions {hi}..{lo} all present")
+                f"The revision history lists {sorted(set(revs_hist), reverse=True)} but is missing "
+                f"revision(s) {gap}." if gap
+                else f"The revision history runs from {lo} to {hi} with no gaps.")
 
     # --- document number / file name consistency ---
     doc_no = row.get("Document Number", "").strip()
     fname = row.get("File Name", "").strip()
     actual = os.path.basename(pdf_path)
     res.add("File Name matches the PDF", PASS if fname == actual else FAIL,
-            f"loadsheet={fname!r} actual={actual!r}")
+            f"The file name matches the loadsheet ({actual!r})." if fname == actual
+            else f"The loadsheet says {fname!r} but the actual file is {actual!r}.")
     in_text = doc_no and doc_no.lower() in full_text.lower()
     in_name = doc_no and doc_no.lower() in actual.lower()
     docno_snip = crop_highlight(doc, doc_no, "PASS") if in_text else ""
     res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
-            f"{doc_no!r} found in {'document text' if in_text else 'file name' if in_name else 'NEITHER text nor name'}",
+            f"The document number {doc_no!r} appears in the document's text." if in_text
+            else f"The document number {doc_no!r} appears in the file name." if in_name
+            else f"The document number {doc_no!r} was not found in the document text or the file name.",
             docno_snip)
+
+    # --- security classification (deterministic; only docs the loadsheet marks) ---
+    # It is often a tick-box group, so crop the WHOLE section (all boxes visible),
+    # not just the matched word. The LLM layer decides which box is actually ticked.
+    sc = security_classification_check(row, crop_fn=lambda v: crop_security_section(doc, v))
+    if sc is not None:
+        res.checks.append(sc)
 
     # --- content consistency: loadsheet vs the document's title-block text ---
     # The PDF's file metadata is unreliable (e.g. /Title is often empty), so
@@ -633,12 +775,13 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
 
         def content_check(label: str, value: str, kind: str = "text", snippet: bool = False) -> None:
             if norm(value) == "":
-                res.add(label, PASS, "not asserted (NA)")
+                res.add(label, PASS, "The loadsheet leaves this blank (NA), so there is nothing to check.")
                 return
             ok = date_in_text(value.strip(), hay) if kind == "date" else norm_text(value) in hay
             snip = crop_highlight(doc, value.strip(), "PASS") if (ok and snippet) else ""
             res.add(label, PASS if ok else FAIL,
-                    f"loadsheet {value.strip()!r} {'found in' if ok else 'NOT found in'} document", snip)
+                    f"The loadsheet value {value.strip()!r} appears in the document." if ok
+                    else f"The loadsheet value {value.strip()!r} could not be found in the document.", snip)
 
         content_check("Title matches document", row.get("Title", ""), snippet=True)
         content_check("Issue Purpose matches document", row.get("Issue Purpose", ""), snippet=True)
@@ -646,7 +789,7 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
         # Revision: confirm against revision evidence (filename + rev tables in the text).
         rval = norm(row.get("Revision"))
         if rval == "":
-            res.add("Revision matches document", PASS, "not asserted (NA)")
+            res.add("Revision matches document", PASS, "The loadsheet leaves Revision blank (NA), so there is nothing to check.")
         else:
             revs: set[str] = set()
             mfn = re.search(r"_rev[ _]?0*(\d+)", actual, re.I)
@@ -661,19 +804,27 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             revs = {r for r in revs if r.isdigit() and int(r) < 100}  # drop years/page-nos
             rv = str(int(rval)) if rval.isdigit() else rval
             if rv in revs:
-                res.add("Revision matches document", PASS, f"rev {rv} confirmed (doc revs {sorted(revs)})")
+                res.add("Revision matches document", PASS,
+                        f"The loadsheet revision {rv} matches the revision shown in the document.")
             elif revs:
-                res.add("Revision matches document", FAIL, f"loadsheet rev {rv} not among document revs {sorted(revs)}")
+                res.add("Revision matches document", FAIL,
+                        f"The loadsheet says revision {rv}, but the document shows revision(s) {sorted(revs)}.")
             else:
-                res.add("Revision matches document", WARN, f"rev {rv} - no revision evidence in document")
+                res.add("Revision matches document", WARN,
+                        f"The loadsheet says revision {rv}, but the document gives no revision to compare against.")
 
         # --- file-level metadata consistency (Author / Producer) ---
         # (Also LLM-owned when active; the LLM is given the file metadata to compare.)
         meta = doc.metadata or {}
         for field_name, meta_key in (("Author", "author"), ("Producer", "producer")):
+            sheet_raw = row.get(field_name, "").strip()
+            pdf_raw = (meta.get(meta_key) or "").strip()
             sheet_val, pdf_val = norm(row.get(field_name)), norm(meta.get(meta_key))
             res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == pdf_val else FAIL,
-                    f"loadsheet={row.get(field_name, '').strip()!r}  pdf={(meta.get(meta_key) or '').strip()!r}")
+                    f"The loadsheet {field_name} ({sheet_raw or 'NA'!r}) matches the PDF's {field_name} property."
+                    if sheet_val == pdf_val
+                    else f"The loadsheet {field_name} is {sheet_raw or 'NA'!r} but the PDF's {field_name} "
+                         f"property is {pdf_raw or '(empty)'!r}.")
 
     # --- DEMO checks (per document): PASSED for the demo because the reference
     #     data (PO system, prior-revision repository, document-control review
@@ -692,6 +843,263 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             "(DEMO) document-control review status not available -> passed for demo")
 
     doc.close()
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 - documents (.docx, deterministic)
+#
+# Word documents have no fixed page model without rendering (no converter is
+# assumed installed), so page-geometry checks - blank pages, overlap, off-page
+# overflow - do not apply. Everything that CAN be derived from the .docx
+# (selectable text, embedded logo/stamp/seal images, section orientation,
+# document-number / title / revision / issue-purpose / author / producer
+# consistency) is checked here, mirroring the PDF checks so a .docx gets the
+# same treatment as its PDF twin.
+# ---------------------------------------------------------------------------
+def _docx_element_text(element) -> str:
+    """Every run of text (<w:t>) under an XML element - crucially this includes
+    text inside text boxes / shapes / title blocks, which paragraph iteration
+    alone misses (that is where document numbers and 'Issued for ...' stamps
+    often live in a Word title block)."""
+    from docx.oxml.ns import qn
+    return " ".join((n.text or "") for n in element.iter(qn("w:t")) if (n.text or "").strip())
+
+
+def docx_full_text(doc) -> str:
+    """All selectable text in the .docx: the body (paragraphs, tables and text
+    boxes) plus every section's headers and footers (where document numbers /
+    logos usually live)."""
+    parts = [_docx_element_text(doc.element.body)]
+    seen = {id(doc.element.body)}
+    for sec in doc.sections:
+        for hf in (sec.header, sec.first_page_header, sec.even_page_header,
+                   sec.footer, sec.first_page_footer, sec.even_page_footer):
+            try:
+                el = hf.part.element
+                if id(el) not in seen:
+                    seen.add(id(el))
+                    parts.append(_docx_element_text(el))
+            except Exception:
+                pass
+    return "\n".join(p for p in parts if p.strip())
+
+
+def docx_application(path: str) -> str:
+    """The authoring application recorded in docProps/app.xml (the .docx analogue
+    of a PDF's Producer, e.g. 'Microsoft Office Word'). '' if unavailable."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            app = z.read("docProps/app.xml").decode("utf-8", "ignore")
+        m = re.search(r"<Application>(.*?)</Application>", app)
+        return (m.group(1).strip() if m else "")
+    except Exception:
+        return ""
+
+
+def docx_raster_images(doc):
+    """Every raster image embedded anywhere in the .docx package (body, headers,
+    footers) as (content_type, bytes). Skips vector formats OCR/PIL cannot read."""
+    out = []
+    for part in doc.part.package.iter_parts():
+        ct = getattr(part, "content_type", "") or ""
+        if ct.startswith("image/") and ct not in ("image/x-emf", "image/x-wmf"):
+            try:
+                out.append((ct, part.blob))
+            except Exception:
+                continue
+    return out
+
+
+def scan_docx_logo_images(doc, doc_tokens: set[str]) -> list[dict]:
+    """OCR every raster image embedded in the .docx (logos/stamps/seals) and return
+    one entry per text-bearing image, in the SAME shape as scan_page_logo_images so
+    a logo is judged the same way in a .docx as in its PDF twin: 'selectable' is
+    True when the image's text is also present in the document's selectable text.
+    The crop shown is the logo image itself. Needs Tesseract."""
+    if not ocr_available():
+        return []
+    import io
+    import pytesseract
+    from PIL import Image
+
+    out = []
+    for ct, blob in docx_raster_images(doc):
+        try:
+            ocr = pytesseract.image_to_string(Image.open(io.BytesIO(blob)))
+        except Exception:
+            ocr = ""
+        ocr_words = re.findall(r"[A-Za-z0-9]{3,}", ocr)
+        # Always show the image (the reviewer wants to see the logo/seal). If we
+        # can read text out of it, decide whether that text is selectable; if not,
+        # there is no baked-in text to worry about, so it passes.
+        if ocr_words:
+            missing = {w.lower() for w in ocr_words if w.lower() not in doc_tokens}
+            selectable = len(missing) < OCR_MIN_MISSING_WORDS
+            sample = re.sub(r"\s+", " ", ocr).strip()[:80]
+        else:
+            selectable, sample = True, ""
+        out.append({"snippet": f"data:{ct};base64," + base64.b64encode(blob).decode(),
+                    "sample": sample, "selectable": selectable})
+    return out
+
+
+def check_docx(docx_path: str, row: dict, llm_active: bool = False) -> Result:
+    res = Result(f"DOCUMENT   {os.path.basename(docx_path)}")
+    try:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT
+    except Exception as e:
+        res.add("opens", FAIL, f"python-docx not installed ({e}); run: pip install python-docx")
+        return res
+    try:
+        doc = Document(docx_path)
+    except Exception as e:
+        res.add("opens", FAIL, str(e))
+        return res
+
+    full_text = docx_full_text(doc)
+    hay = norm_text(full_text)
+    has_text = bool(full_text.strip())
+    images = docx_raster_images(doc)
+
+    # --- searchable / selectable text (a .docx text layer is inherently selectable) ---
+    res.add("text searchable / selectable", PASS if has_text else FAIL,
+            f"All the text is selectable - about {len(full_text.split()):,} words were read straight "
+            f"from the document." if has_text
+            else "No selectable text could be read from the document.")
+
+    # --- no blank pages: no fixed page model in a .docx; treat empty content as the failure ---
+    res.add("no blank pages", PASS if (has_text or images) else FAIL,
+            "The document has content." if (has_text or images)
+            else "The document appears to be empty (no text and no images).")
+
+    # --- images are OCR'd (DETERMINISTIC, non-AI): the embedded images found in the
+    #     .docx package (get_images() equivalent) plus the image-only case. Same
+    #     rule as PDFs; vector logos/seals are handled by the AI 'Logos & seals' check. ---
+    ocr_on = ocr_available()
+    logo_images = [(None, e) for e in scan_docx_logo_images(doc, set(re.findall(r"[a-z0-9]{3,}", hay)))] if ocr_on else []
+    scanned = ("The document is made up of images only, with no readable text - it needs to be OCR'd."
+               if (images and not has_text) else None)
+    _add_images_ocrd_check(res, logo_images, scanned_note=scanned, ocr_on=ocr_on)
+
+    # --- orientation consistent across sections ---
+    oris = ["landscape" if s.orientation == WD_ORIENT.LANDSCAPE else "portrait" for s in doc.sections]
+    expected = oris[0] if oris else "portrait"
+    bad_ori = [i + 1 for i, o in enumerate(oris) if o != expected]
+    res.add("Page orientation consistent", FAIL if bad_ori else PASS,
+            f"The document starts {expected}, but section {bad_ori} switch orientation." if bad_ori
+            else f"All {len(oris)} section(s) are {expected} - orientation is consistent.")
+
+    # --- revision history complete (parsed from the text, same as the PDF check) ---
+    revs_hist = revision_history_numbers(full_text)
+    if len(revs_hist) < 2:
+        res.add("Revision history is complete", PASS,
+                "No multi-row revision history to check - nothing missing.")
+    else:
+        lo, hi = min(revs_hist), max(revs_hist)
+        gap = [x for x in range(lo, hi + 1) if x not in set(revs_hist)]
+        res.add("Revision history is complete", WARN if gap else PASS,
+                f"The revision history lists {sorted(set(revs_hist), reverse=True)} but is missing "
+                f"revision(s) {gap}." if gap
+                else f"The revision history runs from {lo} to {hi} with no gaps.")
+
+    # --- document number / file name consistency ---
+    doc_no = row.get("Document Number", "").strip()
+    fname = row.get("File Name", "").strip()
+    actual = os.path.basename(docx_path)
+    res.add("File Name matches the PDF", PASS if fname == actual else FAIL,
+            f"The file name matches the loadsheet ({actual!r})." if fname == actual
+            else f"The loadsheet says {fname!r} but the actual file is {actual!r}.")
+
+    tgt_clean = clean_id(doc_no)
+    clean_hit = bool(tgt_clean) and tgt_clean in clean_id(full_text)
+    in_text = bool(doc_no) and doc_no.lower() in full_text.lower()
+    in_name = bool(doc_no) and doc_no.lower() in actual.lower()
+    if clean_hit:
+        res.add("Document metadata legible on each page", PASS,
+                f"The document number {doc_no!r} is present in the document text (headers and footers included).")
+    else:
+        where = ("only in the file name, not in the text" if in_name
+                 else "nowhere in the document text or file name")
+        res.add("Document metadata legible on each page", WARN,
+                f"The document number {doc_no!r} was found {where} "
+                f"(a .docx has no rendered title block to read).")
+    res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
+            f"The document number {doc_no!r} appears in the document's text." if in_text
+            else f"The document number {doc_no!r} appears in the file name." if in_name
+            else f"The document number {doc_no!r} was not found in the document text or the file name.")
+
+    # --- security classification (no crop - a .docx is not rendered; AI reads it) ---
+    sc = security_classification_check(row, crop_fn=None)
+    if sc is not None:
+        res.checks.append(sc)
+
+    # --- content consistency (skipped when the LLM owns it, exactly as for PDFs) ---
+    if not llm_active:
+        def content_check(label: str, value: str, kind: str = "text") -> None:
+            if norm(value) == "":
+                res.add(label, PASS, "The loadsheet leaves this blank (NA), so there is nothing to check.")
+                return
+            ok = date_in_text(value.strip(), hay) if kind == "date" else norm_text(value) in hay
+            res.add(label, PASS if ok else FAIL,
+                    f"The loadsheet value {value.strip()!r} appears in the document." if ok
+                    else f"The loadsheet value {value.strip()!r} could not be found in the document.")
+
+        content_check("Title matches document", row.get("Title", ""))
+        content_check("Issue Purpose matches document", row.get("Issue Purpose", ""))
+
+        # Revision: a .docx has no rendered title block, so the current revision
+        # cannot be pinned down deterministically - confirm from the revision text
+        # if possible, otherwise WARN (never a hard FAIL on text-only evidence).
+        rval = norm(row.get("Revision"))
+        if rval == "":
+            res.add("Revision matches document", PASS, "not asserted (NA)")
+        else:
+            revs: set[str] = set()
+            for mm in re.finditer(r"rev(?:ision)?\.?\s*0*(\d+)", hay):
+                revs.add(str(int(mm.group(1))))
+            revs = {r for r in revs if r.isdigit() and int(r) < 100}
+            rv = str(int(rval)) if rval.isdigit() else rval
+            if rv in revs:
+                res.add("Revision matches document", PASS,
+                        f"The loadsheet revision {rv} matches the revision mentioned in the document.")
+            else:
+                res.add("Revision matches document", WARN,
+                        f"The loadsheet says revision {rv}. A .docx has no rendered title block to "
+                        f"confirm the current revision"
+                        + (f"; the text mentions revision(s) {sorted(revs)}." if revs else "."))
+
+        # Author / Producer from the .docx core + app properties.
+        cp = doc.core_properties
+        author = (cp.author or "").strip()
+        producer = docx_application(docx_path)
+        for field_name, val in (("Author", author), ("Producer", producer)):
+            sheet_raw = row.get(field_name, "").strip()
+            sheet_val = norm(row.get(field_name))
+            if sheet_val == "":
+                res.add(f"{field_name} matches PDF metadata", PASS,
+                        f"The loadsheet leaves {field_name} blank (NA), so there is nothing to check.")
+            else:
+                res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == norm(val) else FAIL,
+                        f"The loadsheet {field_name} ({sheet_raw!r}) matches the document's {field_name} property."
+                        if sheet_val == norm(val)
+                        else f"The loadsheet {field_name} is {sheet_raw!r} but the document's {field_name} "
+                             f"property is {val or '(empty)'!r}.")
+
+    # --- DEMO checks (per document): same as the PDF path so parity is preserved ---
+    po = row.get("Purchase Order number", row.get("Purchase Order Number", "")).strip()
+    res.add("Purchase Order Number is populated and matches document (for Supplier documentation)", PASS,
+            "(DEMO) PO system not available -> passed for demo" if norm(po) == ""
+            else f"(DEMO) loadsheet PO {po!r}; reference PO data not available -> passed for demo")
+    rev_val = row.get("Revision", "").strip()
+    res.add("Prior revision availability and match", PASS,
+            f"(DEMO) prior-revision repository not available; current revision on sheet = {rev_val or 'NA'!r} "
+            f"-> passed for demo")
+    res.add("Check for prior revisions still under review", PASS,
+            "(DEMO) document-control review status not available -> passed for demo")
+
     return res
 
 
@@ -755,16 +1163,28 @@ Return EXACTLY one result for each of these names:
                               named in the document title block is acceptable corroboration).
   "Producer (LLM)"          - loadsheet 'Producer' vs the PDF file metadata Producer shown above (the
                               software that generated the PDF).
-  "Stamp / seal text is selectable (LLM)" - Examine every engineer's stamp, seal, approval/QA stamp,
-                              signature block and company/vendor logo visible in the rendered pages
-                              (look closely at the higher-resolution title-block crops). If any of them
-                              contains text - an engineer's name, a licence/registration number, words
-                              such as "PROFESSIONAL ENGINEER" or a state name, a company name - that does
-                              NOT appear in the EXTRACTED DOCUMENT TEXT above, return WARN and put that
-                              text in document_value (it is drawn as an image/vector, so it is not
-                              selectable/searchable and should be made selectable / OCR'd). If every such
-                              stamp/seal/logo's text is also present in the extracted text, or there are
-                              no stamps/seals/logos at all, return PASS. loadsheet_value = "NA".
+  "Logos & seals (AI)"      - Visually identify EVERY company / vendor logo, engineer's stamp,
+                              professional / PE seal, notary seal, approval / QA stamp and signature
+                              block visible in the rendered pages (look closely at the header and
+                              title-block crops - there is often more than one). For EACH one, decide
+                              whether the text it shows also appears in the EXTRACTED DOCUMENT TEXT above.
+                              If ANY of them has text - a company name, an engineer's name, a licence /
+                              registration number, words such as "PROFESSIONAL ENGINEER" or a state name -
+                              that is NOT in the extracted text, return WARN and quote that text in
+                              document_value (it is drawn as an image / vector, so it is not selectable
+                              and should be OCR'd). If every logo / stamp / seal's text is also in the
+                              extracted text, or there are none, return PASS. loadsheet_value = "NA".
+  "Security Classification (LLM)" - Find the "Security Classification" / "Security Classification &
+                              Disclosure" block. It is usually a set of tick-boxes (e.g. COMPANY USE,
+                              CONFIDENTIAL, PUBLIC, RESTRICTED). Look at the boxes and decide WHICH ONE is
+                              TICKED - a ticked box shows as a filled / crossed box (for example the
+                              character U+2612 or a hand-drawn tick / X inside the box), while the others
+                              are empty (U+2610). Report the classification next to the ticked box as
+                              document_value (e.g. "Company Use"). Compare it with the loadsheet
+                              'Security Classification': same -> PASS; the document clearly shows a
+                              DIFFERENT box ticked -> FAIL; loadsheet blank / "NA" -> PASS. If the document
+                              has no such block at all, document_value = "(none found)" and PASS.
+                              loadsheet_value = the loadsheet 'Security Classification'.
 """
 
 
@@ -778,10 +1198,12 @@ def _render_pages(doc, page_indices, dpi=150):
 
 
 def _render_titleblock_crops(doc, dpi=220):
-    """Higher-resolution crops of the bottom band of the first and last page,
-    where title blocks / engineer stamps / seals / company logos usually sit -
-    so the LLM can read small stamp text that is easy to miss in the downscaled
-    full-page images (used by the 'Stamp / seal text is selectable' check)."""
+    """Higher-resolution crops of the TOP band (header logos) and BOTTOM band
+    (title blocks / engineer stamps / seals) of the first and last page - the
+    places company logos, stamps and seals usually sit - so the LLM can read
+    small stamp/logo text that is easy to miss in the downscaled full-page images
+    (used by the 'Stamp / seal / logo text is selectable' check). Logos often
+    appear more than once and in either band, so both are rendered."""
     out, seen = [], set()
     for p in (0, doc.page_count - 1):
         if p in seen or not (0 <= p < doc.page_count):
@@ -789,9 +1211,11 @@ def _render_titleblock_crops(doc, dpi=220):
         seen.add(p)
         page = doc[p]
         r = page.rect
-        band = fitz.Rect(r.x0, r.y0 + r.height * 0.6, r.x1, r.y1) & r  # bottom 40%
-        png = page.get_pixmap(clip=band, dpi=dpi).tobytes("png")
-        out.append(base64.b64encode(png).decode())
+        top = fitz.Rect(r.x0, r.y0, r.x1, r.y0 + r.height * 0.22) & r      # header (top 22%)
+        bottom = fitz.Rect(r.x0, r.y0 + r.height * 0.6, r.x1, r.y1) & r    # title block (bottom 40%)
+        for band in (top, bottom):
+            png = page.get_pixmap(clip=band, dpi=dpi).tobytes("png")
+            out.append(base64.b64encode(png).decode())
     return out
 
 
@@ -805,6 +1229,13 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
         imgs = _render_pages(doc, sorted({0, 1, 2, doc.page_count - 1}))
         # Extra hi-res crops of the title-block band so small stamp/seal text is legible.
         imgs += _render_titleblock_crops(doc)
+        # If the loadsheet marks a security classification, hand the LLM a clean,
+        # high-res crop of the classification section so it can read which box is
+        # ticked (this is the authoritative source for the classification value).
+        if norm(row.get("Security Classification")):
+            sc_uri = crop_security_section(doc, highlight=False)
+            if sc_uri:
+                imgs.append(sc_uri.split(",", 1)[1])
         meta = doc.metadata or {}
         meta_str = "\n".join(f"  {label}: {meta.get(key) or '(none)'}"
                              for label, key in (("Author", "author"), ("Producer", "producer"),
@@ -850,6 +1281,54 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
     return res
 
 
+def check_docx_llm(client, docx_path: str, row: dict, model: str) -> Result | None:
+    """LLM content review for a .docx. Same prompt/checks as the PDF path, but the
+    inputs are the extracted text plus the document's embedded raster images
+    (logos / stamps / seals) instead of rendered pages, since no .docx->PDF
+    renderer is assumed available. No cropped evidence snippets for the same reason."""
+    res = Result(f"DOCUMENT (LLM)  {os.path.basename(docx_path)}")
+    try:
+        import json
+        from docx import Document
+        doc = Document(docx_path)
+        full_text = docx_full_text(doc)[:30000]
+        cp = doc.core_properties
+        meta_str = "\n".join((
+            f"  Author: {(cp.author or '(none)')}",
+            f"  Producer: {(docx_application(docx_path) or '(none)')}",
+            f"  Creator: {(cp.last_modified_by or '(none)')}",
+            f"  Title: {(cp.title or '(none)')}",
+        ))
+        sheet = "\n".join(f"  {k.strip()}: {v.strip()}" for k, v in row.items() if v.strip())
+        content = [{"type": "text",
+                    "text": LLM_PROMPT.format(sheet=sheet, meta=meta_str)
+                    + "\n\n(This is a .docx; the images below are the logos/stamps/seals embedded in it.)"
+                    + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
+        for ct, blob in docx_raster_images(doc)[:12]:
+            b = base64.b64encode(blob).decode()
+            content.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
+
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=0,
+            max_tokens=4000,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
+                {"role": "user", "content": content},
+            ],
+        )
+        for c in json.loads(resp.choices[0].message.content).get("checks", []):
+            name = c.get("name", "check")
+            status = c.get("status", WARN)
+            lv, dv, ev = c.get("loadsheet_value", ""), c.get("document_value", ""), c.get("evidence", "")
+            detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
+            res.add(name, status, detail[:300])
+    except Exception as e:
+        res.add("LLM review (could not complete)", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+    return res
+
+
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
@@ -872,13 +1351,14 @@ def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[
             pdf_path = os.path.join(files_dir, row.get("File Name", "").strip())
             if not os.path.isfile(pdf_path):
                 continue
+            is_docx = os.path.splitext(pdf_path)[1].lower() == ".docx"
             t0 = time.perf_counter()
-            det = check_pdf(pdf_path, row, llm_active=client is not None)
+            det = (check_docx if is_docx else check_pdf)(pdf_path, row, llm_active=client is not None)
             det.elapsed = time.perf_counter() - t0
             results.append(det)
             if client is not None:
                 t0 = time.perf_counter()
-                llm = check_pdf_llm(client, pdf_path, row, model)
+                llm = (check_docx_llm if is_docx else check_pdf_llm)(client, pdf_path, row, model)
                 if llm is not None:
                     llm.elapsed = time.perf_counter() - t0
                     results.append(llm)
@@ -886,24 +1366,113 @@ def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[
     return results, ok
 
 
+# Deterministic and LLM checks that assert the SAME thing are collapsed to one
+# canonical entry so the report shows each check ONCE (no "AI review" vs
+# "deterministic" split, no repetition). Names not listed keep their own name.
+CANON_CHECK = {
+    "Document Number consistent": "Document Number",
+    "Document Number (LLM)": "Document Number",
+    "Title matches document": "Title",
+    "Title (LLM)": "Title",
+    "Issue Purpose matches document": "Issue Purpose",
+    "Issue Purpose (LLM)": "Issue Purpose",
+    "Revision matches document": "Revision",
+    "Revision (LLM)": "Revision",
+    "Author matches PDF metadata": "Author",
+    "Author (LLM)": "Author",
+    "Producer matches PDF metadata": "Producer",
+    "Producer (LLM)": "Producer",
+    # NOTE: the two image checks are intentionally NOT merged - "Images are OCR'd"
+    # (deterministic, embedded raster images via get_images()) and "Logos & seals
+    # (AI)" (LLM, reads the rendered page) are distinct and shown side by side.
+}
+
+
+def _canon_check(name: str) -> str:
+    """Canonical display name for a check. Explicit aliases collapse a
+    deterministic check and its LLM twin to one name; anything else just has a
+    trailing '(LLM)' stripped, so AI-only checks (Diagram/Contract Number) read
+    as plain checks in the single unified list rather than an 'AI' variant."""
+    if name in CANON_CHECK:
+        return CANON_CHECK[name]
+    return re.sub(r"\s*\(LLM\)\s*$", "", name)
+
+
+def _merge_doc_checks(det_checks: list[dict], llm_checks: list[dict]) -> list[dict]:
+    """Combine one document's deterministic + LLM checks into a single list,
+    de-duplicated by canonical concept so each check is shown exactly once. When
+    both a deterministic and an LLM version exist (e.g. Document Number), the LLM
+    verdict wins (it is the authoritative content reviewer) but a deterministic
+    evidence snippet is kept if the LLM entry has none. Order follows first
+    appearance, so document-quality checks stay first and data checks follow."""
+    from collections import OrderedDict
+    by: "OrderedDict[str, dict]" = OrderedDict()
+
+    def push(c: dict, is_llm: bool) -> None:
+        key = _canon_check(c["name"])
+        item = {"name": key, "status": c["status"], "detail": c.get("detail", ""),
+                "snippet": c.get("snippet", ""), "snippets": c.get("snippets", [])}
+        if key in by:
+            prev = by[key]
+            if is_llm:  # LLM verdict is authoritative; keep any earlier evidence images
+                item["snippet"] = item["snippet"] or prev.get("snippet", "")
+                item["snippets"] = item["snippets"] or prev.get("snippets", [])
+                by[key] = item
+            else:
+                if not prev.get("snippet") and item["snippet"]:
+                    prev["snippet"] = item["snippet"]
+                if not prev.get("snippets") and item["snippets"]:
+                    prev["snippets"] = item["snippets"]
+        else:
+            by[key] = item
+
+    for c in det_checks:
+        push(c, is_llm=False)
+    for c in llm_checks:
+        push(c, is_llm=True)
+    return list(by.values())
+
+
 def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
-    """Compact, UI-friendly report. Failures are grouped by check name so the
-    'why it failed' list stays short and readable."""
+    """Compact, UI-friendly report. Each document's deterministic and LLM checks
+    are merged into ONE stage (one list, no repetition); failures are grouped by
+    check name so the 'why it failed' list stays short and readable."""
     from collections import OrderedDict
 
-    stages = [{
-        "title": r.title,
-        "ok": r.ok,
-        "elapsed": r.elapsed,
-        "checks": [{"name": c.name, "status": c.status, "detail": c.detail, "snippet": c.snippet}
-                   for c in r.checks],
-    } for r in results]
+    # Group the raw stages: the loadsheet stage(s) pass through unchanged; each
+    # document's deterministic + LLM stages are merged into a single stage.
+    doc_parts: "OrderedDict[str, dict]" = OrderedDict()
+    stages: list[dict] = []
+    for r in results:
+        sd = {"title": r.title, "ok": r.ok, "elapsed": r.elapsed,
+              "checks": [{"name": c.name, "status": c.status, "detail": c.detail,
+                          "snippet": c.snippet, "snippets": c.snippets}
+                         for c in r.checks]}
+        if r.title.startswith("DOCUMENT (LLM)"):
+            fn = r.title[len("DOCUMENT (LLM)"):].strip()
+            doc_parts.setdefault(fn, {"det": [], "llm": [], "elapsed": 0.0})
+            doc_parts[fn]["llm"] = sd["checks"]
+            doc_parts[fn]["elapsed"] += r.elapsed
+        elif r.title.startswith("DOCUMENT"):
+            fn = r.title[len("DOCUMENT"):].strip()
+            doc_parts.setdefault(fn, {"det": [], "llm": [], "elapsed": 0.0})
+            doc_parts[fn]["det"] = sd["checks"]
+            doc_parts[fn]["elapsed"] += r.elapsed
+        else:
+            stages.append(sd)
+
+    for fn, parts in doc_parts.items():
+        merged = _merge_doc_checks(parts["det"], parts["llm"])
+        stages.append({"title": f"DOCUMENT   {fn}",
+                       "ok": all(c["status"] != FAIL for c in merged),
+                       "elapsed": parts["elapsed"],
+                       "checks": merged})
 
     grouped: "OrderedDict[str, list[str]]" = OrderedDict()
-    for r in results:
-        for c in r.checks:
-            if c.status == FAIL:
-                grouped.setdefault(c.name, []).append(c.detail)
+    for s in stages:
+        for c in s["checks"]:
+            if c["status"] == FAIL:
+                grouped.setdefault(c["name"], []).append(c["detail"])
     reasons = []
     for name, details in grouped.items():
         if len(details) > 1:
@@ -911,9 +1480,9 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
         else:
             reasons.append(f"{name}: {details[0]}" if details[0] else name)
 
-    n_checks = sum(len(r.checks) for r in results)
-    n_fail = sum(1 for r in results for c in r.checks if c.status == FAIL)
-    n_docs = sum(1 for r in results if r.title.startswith("DOCUMENT"))
+    n_checks = sum(len(s["checks"]) for s in stages)
+    n_fail = sum(1 for s in stages for c in s["checks"] if c["status"] == FAIL)
+    n_docs = sum(1 for s in stages if s["title"].startswith("DOCUMENT"))
     if ok:
         headline = f"All {n_checks} checks passed across {n_docs} document(s)."
     elif n_docs == 0:
