@@ -127,10 +127,11 @@ def _thumbs(check: dict) -> str:
 
 # Some items are shown as "detected" info rows (with a screenshot when found)
 # rather than pass/fail checks, so they are pulled out of the checks list.
-DETECTED_NAMES = ("Security Classification", "Contract Number", "Diagram Number")
+# Security Classification and the contract number are now shown as ordinary
+# checks (conditionally, when a value is found - see validate._order_doc_checks),
+# so only the diagram number remains a purely-informational detected identifier.
+DETECTED_NAMES = ("Diagram Number",)
 DETECTED_LABELS = {
-    "Security Classification": "Security classification detected",
-    "Contract Number": "Contract number detected",
     "Diagram Number": "Diagram number detected",
 }
 _NONE_VALUES = {"", "(NONE FOUND)", "NA", "NONE", "(NONE)", "N/A"}

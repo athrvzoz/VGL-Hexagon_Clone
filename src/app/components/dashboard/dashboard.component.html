@@ -33,7 +33,6 @@
         <th style="width: 80px;">Target Date</th>
         <th style="width: 120px;">Creation Date</th>
         <th>Details</th>
-        <th style="width: 170px;">Bot Review</th>
       </tr>
     </thead>
     <tbody>
@@ -59,10 +58,20 @@
 
         <td>{{ task.author }}</td>
         <td class="step-name-cell">
-          <span class="step-icon" [ngClass]="getStepIconClass(task.stepName)" title="{{ task.stepName }}">
-            <svg width="9" height="9" viewBox="0 0 12 12" fill="currentColor"><path d="M2 6l4-4 1.4 1.4L5.8 5H10v2H5.8l1.6 1.6L6 10 2 6z"/></svg>
-          </span>
-          {{ task.stepName }}
+          @if (state.botStatus()[task.id]; as st) {
+            @if (st === 'reviewing') {
+              <span class="bot-chip reviewing"><span class="bot-spinner"></span> Bot reviewing…</span>
+            } @else if (st === 'pass') {
+              <span class="bot-status pass">Bot reviewed</span>
+            } @else {
+              <span class="bot-status fail">Bot reviewed</span>
+            }
+          } @else {
+            <span class="step-icon" [ngClass]="getStepIconClass(task.stepName)" title="{{ task.stepName }}">
+              <svg width="9" height="9" viewBox="0 0 12 12" fill="currentColor"><path d="M2 6l4-4 1.4 1.4L5.8 5H10v2H5.8l1.6 1.6L6 10 2 6z"/></svg>
+            </span>
+            {{ task.stepName }}
+          }
         </td>
         <td>{{ task.submittalDescription }}</td>
         <td>{{ task.reasonForIssue }}</td>
@@ -70,19 +79,6 @@
         <td>{{ task.targetDate }}</td>
         <td>{{ task.creationDate }}</td>
         <td>{{ task.details }}</td>
-        <td class="bot-cell" (click)="$event.stopPropagation()">
-          @if (state.botStatus()[task.id]; as st) {
-            @if (st === 'reviewing') {
-              <span class="bot-chip reviewing"><span class="bot-spinner"></span> Bot reviewing…</span>
-            } @else if (st === 'pass') {
-              <span class="bot-chip pass">✓ Passed</span>
-              <button class="report-btn" (click)="state.openReport(task.id)">Report</button>
-            } @else {
-              <span class="bot-chip fail">✗ Failed</span>
-              <button class="report-btn" (click)="state.openReport(task.id)">Report</button>
-            }
-          }
-        </td>
       </tr>
       }
     </tbody>

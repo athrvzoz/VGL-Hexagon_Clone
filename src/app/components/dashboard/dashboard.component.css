@@ -184,6 +184,10 @@
 .bot-chip.pass      { background: #e6f4ea; color: #1e8e3e; }
 .bot-chip.fail      { background: #fce8e6; color: #d93025; }
 
+.bot-status { font-size: 12px; font-weight: 700; letter-spacing: .2px; }
+.bot-status.pass { color: #1e8e3e; }
+.bot-status.fail { color: #d93025; }
+
 .bot-spinner {
   width: 10px;
   height: 10px;

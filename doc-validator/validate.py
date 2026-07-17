@@ -119,20 +119,99 @@ def norm(v: str | None) -> str:
     return "" if s.upper() in ("", "NA", "N/A", "NONE") else " ".join(s.lower().split())
 
 
+# ---------------------------------------------------------------------------
+# Azure OpenAI token accounting
+# ---------------------------------------------------------------------------
+# Every chat.completions response carries a `usage` object (prompt_tokens /
+# completion_tokens / total_tokens) - the authoritative, billed numbers straight
+# from Azure. Each call is logged to the terminal as it happens and accumulated
+# so a run's total can be printed at the end (run_validation /
+# run_document_only_validation reset the counters at the start of each run).
+LLM_USAGE = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def reset_llm_usage() -> None:
+    for k in LLM_USAGE:
+        LLM_USAGE[k] = 0
+
+
+def get_llm_usage() -> dict:
+    return dict(LLM_USAGE)
+
+
+def _track_usage(resp, label: str) -> None:
+    """Record one Azure OpenAI response's usage and log it to the terminal."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    pt = getattr(u, "prompt_tokens", 0) or 0
+    ct = getattr(u, "completion_tokens", 0) or 0
+    tt = getattr(u, "total_tokens", 0) or (pt + ct)
+    LLM_USAGE["calls"] += 1
+    LLM_USAGE["prompt_tokens"] += pt
+    LLM_USAGE["completion_tokens"] += ct
+    LLM_USAGE["total_tokens"] += tt
+    print(f"{DIM}[tokens] {label}: input={pt:,}  output={ct:,}  total={tt:,}{RESET}",
+          file=sys.stderr, flush=True)
+
+
+def print_llm_usage_summary(stream=sys.stderr) -> None:
+    """Print the accumulated Azure OpenAI usage for the run (no-op if no calls)."""
+    u = LLM_USAGE
+    if not u["calls"]:
+        return
+    print(f"{BOLD}[tokens] RUN TOTAL: {u['calls']} Azure OpenAI call(s)  "
+          f"input={u['prompt_tokens']:,}  output={u['completion_tokens']:,}  "
+          f"total={u['total_tokens']:,}{RESET}", file=stream, flush=True)
+
+
 def norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).lower()
 
 
+def near_match(a: str, b: str) -> bool:
+    """True when two ALREADY-NORMALISED values are almost certainly the same thing
+    written slightly differently (one contains the other, or they differ only in a
+    version / spacing / punctuation detail). Used to soften a hard FAIL to a WARN -
+    two genuinely different values (different names, different tools) stay a FAIL."""
+    if not a or not b:
+        return False
+    if len(a) >= 4 and len(b) >= 4 and (a in b or b in a):
+        return True
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio() >= 0.9
+
+
+_MONTHS_FULL = ["january", "february", "march", "april", "may", "june",
+                "july", "august", "september", "october", "november", "december"]
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
 def date_in_text(ddmmyyyy: str, hay: str) -> bool:
-    """True if a DD/MM/YYYY date appears in `hay` (already lower/space-collapsed) in any common form."""
+    """True if a DD/MM/YYYY date appears in `hay` (already lower/space-collapsed) in any common form:
+    numeric with / - . separators (zero-padded or not, either endianness), ISO, and written-out
+    forms with abbreviated or full month names, with or without an ordinal suffix."""
     try:
         d, m, y = ddmmyyyy.strip().split("/")
-        mon = _MONTHS[int(m) - 1]
+        mon, monf = _MONTHS[int(m) - 1], _MONTHS_FULL[int(m) - 1]
     except (ValueError, IndexError):
         return False
     di, mi = str(int(d)), str(int(m))
-    cands = [f"{d}/{m}/{y}", f"{di}/{mi}/{y}", f"{d}-{mon}-{y}", f"{di}-{mon}-{y}",
-             f"{y}-{m}-{d}", f"{d}-{m}-{y}", f"{d}.{m}.{y}", f"{mon} {di}, {y}", f"{di} {mon} {y}"]
+    dd, mm = di.zfill(2), mi.zfill(2)
+    suf = _ordinal(int(d))
+    cands = []
+    for day, mon_no in ((dd, mm), (di, mi)):
+        cands += [f"{day}/{mon_no}/{y}", f"{day}-{mon_no}-{y}", f"{day}.{mon_no}.{y}",
+                  f"{y}-{mon_no}-{day}", f"{y}/{mon_no}/{day}", f"{y}.{mon_no}.{day}"]
+    for day in (dd, di):
+        for name in (mon, monf):
+            cands += [f"{day}-{name}-{y}", f"{day} {name} {y}", f"{day}{suf} {name} {y}",
+                      f"{name} {day}, {y}", f"{name} {day} {y}", f"{day}-{name}-{y[2:]}"]
     return any(c.lower() in hay for c in cands)
 
 
@@ -487,6 +566,41 @@ def rects_overlap(a, b, min_frac: float = 0.25) -> bool:
     return smaller > 0 and inter / smaller >= min_frac
 
 
+# A page is flagged for overlap only when it has at least this many genuinely
+# colliding word pairs - isolated pairs are almost always rotated labels in
+# line-art whose axis-aligned boxes cross without the glyphs actually touching.
+OVERLAP_MIN_COLLISIONS = 3
+
+
+def page_text_geometry(page) -> tuple[int, list[str]]:
+    """Word-level layout inspection -> (collisions, spilled_words).
+
+    collisions = pairs of DIFFERENT words whose glyph boxes overlap by >=60% of
+    the smaller box (real double-printed text). Block-level geometry (the old
+    test) over-reported badly on engineering layouts - dense tables, line-art
+    and rotated labels produced dozens of phantom overlaps per page - so the
+    test now runs on the actual word boxes.
+
+    spilled_words = words whose glyph box extends past the visible page edge
+    (block boxes include trailing whitespace, which false-fired the old check)."""
+    pr = page.rect
+    m = 2  # tolerance in points
+    words = [w for w in page.get_text("words") if len(w[4].strip()) > 1]
+    words.sort(key=lambda w: (w[1], w[0]))
+    collisions = 0
+    for i, a in enumerate(words):
+        for b in words[i + 1:]:
+            if b[1] >= a[3]:
+                break  # sorted by y0: nothing further down can overlap `a`
+            if a[4] == b[4] and abs(a[0] - b[0]) < 1.0 and abs(a[1] - b[1]) < 1.0:
+                continue  # same word re-painted in place (faux-bold) - not a defect
+            if rects_overlap(a[:4], b[:4], min_frac=0.6):
+                collisions += 1
+    spilled = [w[4] for w in words
+               if w[0] < pr.x0 - m or w[1] < pr.y0 - m or w[2] > pr.x1 + m or w[3] > pr.y1 + m]
+    return collisions, spilled
+
+
 # ---------------------------------------------------------------------------
 # Stage 1 - loadsheet
 # ---------------------------------------------------------------------------
@@ -596,35 +710,29 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
         if not has_text:
             pages_no_text.append(pno + 1)
 
-        # Geometry: overlapping text blocks and content spilling off the page.
-        blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
-        boxes = [b[:4] for b in blocks]
-        overlaps = 0
-        for a in range(len(boxes)):
-            for b in range(a + 1, len(boxes)):
-                if rects_overlap(boxes[a], boxes[b]):
-                    overlaps += 1
-        if overlaps:
-            overlap_pages.append(f"p{pno + 1}({overlaps})")
-        pr = page.rect
-        m = 2  # tolerance in points
-        if any(x0 < pr.x0 - m or y0 < pr.y0 - m or x1 > pr.x1 + m or y1 > pr.y1 + m
-               for (x0, y0, x1, y1) in boxes):
+        # Geometry: genuinely colliding words and words spilling off the page.
+        collisions, spilled = page_text_geometry(page)
+        if collisions >= OVERLAP_MIN_COLLISIONS:
+            overlap_pages.append(f"p{pno + 1}({collisions})")
+        if spilled:
             overflow_pages.append(pno + 1)
 
     full_text = "\n".join(full_text_parts)
 
     # --- searchable / selectable text ---
-    n_with_text = n - len(pages_no_text)
-    if n_with_text == n:
+    # Blank pages are excluded here: they FAIL the dedicated 'no blank pages'
+    # check and should not fail this one too (one defect, one failure).
+    no_text = [p for p in pages_no_text if p not in pages_blank]
+    n_content = n - len(pages_blank)
+    if not no_text:
         res.add("text searchable / selectable", PASS,
-                f"All {n} page(s) have selectable text you can search and copy.")
-    elif n_with_text == 0:
+                f"All {n_content} page(s) with content have selectable text you can search and copy.")
+    elif len(no_text) == n_content:
         res.add("text searchable / selectable", FAIL,
                 "None of the pages have selectable text - the whole document reads as an image.")
     else:
         res.add("text searchable / selectable", FAIL,
-                f"{len(pages_no_text)} of {n} page(s) have no selectable text (page {pages_no_text[:10]}).")
+                f"{len(no_text)} of {n_content} page(s) have no selectable text (page {no_text[:10]}).")
 
     # --- images are OCR'd (DETERMINISTIC, non-AI) ---
     # Two things, both found without the LLM: (1) image-only / scanned pages that
@@ -654,11 +762,11 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     # these are advisory WARNs. The authoritative visual alignment verdict comes
     # from the LLM layer when it is enabled.
     res.add("no overlapping text", WARN if overlap_pages else PASS,
-            f"Some text blocks may overlap on page(s): {', '.join(overlap_pages[:10])} "
-            f"(often just dense tables or line-art - worth a quick look)." if overlap_pages
-            else "No overlapping text blocks - the layout looks clean.")
+            f"Double-printed / colliding words on page(s): {', '.join(overlap_pages[:10])} "
+            f"(count of colliding word pairs in brackets) - worth a quick look." if overlap_pages
+            else "No overlapping text - the layout looks clean.")
     res.add("content within page bounds", WARN if overflow_pages else PASS,
-            f"Content may run past the page edge on page {overflow_pages[:10]} - worth a quick look."
+            f"Words run past the visible page edge on page {overflow_pages[:10]} - worth a quick look."
             if overflow_pages else "All content sits inside the page margins.")
 
     # --- page orientation (first page sets the expected orientation; any later
@@ -706,8 +814,11 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             else:
                 pages_missing.append(pno + 1)
     exp = f"expected {doc_no_meta!r}"
-    if not pages_mangled and not pages_missing and not pages_suffixed:
-        res.add("Document metadata legible on each page", PASS,
+    if not tgt_clean:
+        res.add("Document metadata on each page", WARN,
+                "No document number to check against (none provided or extracted).")
+    elif not pages_mangled and not pages_missing and not pages_suffixed:
+        res.add("Document metadata on each page", PASS,
                 f"The document number {doc_no_meta!r} is printed clearly on all {n} page(s).")
     else:
         notes = [exp]
@@ -724,7 +835,7 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             notes.append(f"document number not found on page(s) {pages_missing}")
         if pages_clean:
             notes.append(f"clean on {len(pages_clean)} of {n} page(s)")
-        res.add("Document metadata legible on each page", WARN, "; ".join(notes))
+        res.add("Document metadata on each page", WARN, "; ".join(notes))
 
     # --- revision history is complete (no gaps between the listed revisions);
     #     no revision-history table at all is acceptable ---
@@ -747,14 +858,18 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     res.add("File Name matches the PDF", PASS if fname == actual else FAIL,
             f"The file name matches the loadsheet ({actual!r})." if fname == actual
             else f"The loadsheet says {fname!r} but the actual file is {actual!r}.")
-    in_text = doc_no and doc_no.lower() in full_text.lower()
-    in_name = doc_no and doc_no.lower() in actual.lower()
-    docno_snip = crop_highlight(doc, doc_no, "PASS") if in_text else ""
-    res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
-            f"The document number {doc_no!r} appears in the document's text." if in_text
-            else f"The document number {doc_no!r} appears in the file name." if in_name
-            else f"The document number {doc_no!r} was not found in the document text or the file name.",
-            docno_snip)
+    if not doc_no:
+        res.add("Document Number consistent", WARN,
+                "No document number to check (none provided or extracted).")
+    else:
+        in_text = doc_no.lower() in full_text.lower()
+        in_name = doc_no.lower() in actual.lower()
+        docno_snip = crop_highlight(doc, doc_no, "PASS") if in_text else ""
+        res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
+                f"The document number {doc_no!r} appears in the document's text." if in_text
+                else f"The document number {doc_no!r} appears in the file name." if in_name
+                else f"The document number {doc_no!r} was not found in the document text or the file name.",
+                docno_snip)
 
     # --- security classification (deterministic; only docs the loadsheet marks) ---
     # It is often a tick-box group, so crop the WHOLE section (all boxes visible),
@@ -820,11 +935,17 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
             sheet_raw = row.get(field_name, "").strip()
             pdf_raw = (meta.get(meta_key) or "").strip()
             sheet_val, pdf_val = norm(row.get(field_name)), norm(meta.get(meta_key))
-            res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == pdf_val else FAIL,
-                    f"The loadsheet {field_name} ({sheet_raw or 'NA'!r}) matches the PDF's {field_name} property."
-                    if sheet_val == pdf_val
-                    else f"The loadsheet {field_name} is {sheet_raw or 'NA'!r} but the PDF's {field_name} "
-                         f"property is {pdf_raw or '(empty)'!r}.")
+            if sheet_val == pdf_val:
+                res.add(f"{field_name} matches PDF metadata", PASS,
+                        f"The loadsheet {field_name} ({sheet_raw or 'NA'!r}) matches the PDF's {field_name} property.")
+            elif near_match(sheet_val, pdf_val):
+                res.add(f"{field_name} matches PDF metadata", WARN,
+                        f"The loadsheet {field_name} {sheet_raw or 'NA'!r} and the PDF's {field_name} property "
+                        f"{pdf_raw or '(empty)'!r} are nearly identical (a version/spacing difference) - worth a quick look.")
+            else:
+                res.add(f"{field_name} matches PDF metadata", FAIL,
+                        f"The loadsheet {field_name} is {sheet_raw or 'NA'!r} but the PDF's {field_name} "
+                        f"property is {pdf_raw or '(empty)'!r}.")
 
     # --- DEMO checks (per document): PASSED for the demo because the reference
     #     data (PO system, prior-revision repository, document-control review
@@ -833,11 +954,6 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
     res.add("Purchase Order Number is populated and matches document (for Supplier documentation)", PASS,
             "(DEMO) PO system not available -> passed for demo" if norm(po) == ""
             else f"(DEMO) loadsheet PO {po!r}; reference PO data not available -> passed for demo")
-
-    rev_val = row.get("Revision", "").strip()
-    res.add("Prior revision availability and match", PASS,
-            f"(DEMO) prior-revision repository not available; current revision on sheet = {rev_val or 'NA'!r} "
-            f"-> passed for demo")
 
     res.add("Check for prior revisions still under review", PASS,
             "(DEMO) document-control review status not available -> passed for demo")
@@ -1017,19 +1133,26 @@ def check_docx(docx_path: str, row: dict, llm_active: bool = False) -> Result:
     clean_hit = bool(tgt_clean) and tgt_clean in clean_id(full_text)
     in_text = bool(doc_no) and doc_no.lower() in full_text.lower()
     in_name = bool(doc_no) and doc_no.lower() in actual.lower()
-    if clean_hit:
-        res.add("Document metadata legible on each page", PASS,
+    if not tgt_clean:
+        res.add("Document metadata on each page", WARN,
+                "No document number to check against (none provided or extracted).")
+    elif clean_hit:
+        res.add("Document metadata on each page", PASS,
                 f"The document number {doc_no!r} is present in the document text (headers and footers included).")
     else:
         where = ("only in the file name, not in the text" if in_name
                  else "nowhere in the document text or file name")
-        res.add("Document metadata legible on each page", WARN,
+        res.add("Document metadata on each page", WARN,
                 f"The document number {doc_no!r} was found {where} "
                 f"(a .docx has no rendered title block to read).")
-    res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
-            f"The document number {doc_no!r} appears in the document's text." if in_text
-            else f"The document number {doc_no!r} appears in the file name." if in_name
-            else f"The document number {doc_no!r} was not found in the document text or the file name.")
+    if not doc_no:
+        res.add("Document Number consistent", WARN,
+                "No document number to check (none provided or extracted).")
+    else:
+        res.add("Document Number consistent", PASS if (in_text or in_name) else WARN,
+                f"The document number {doc_no!r} appears in the document's text." if in_text
+                else f"The document number {doc_no!r} appears in the file name." if in_name
+                else f"The document number {doc_no!r} was not found in the document text or the file name.")
 
     # --- security classification (no crop - a .docx is not rendered; AI reads it) ---
     sc = security_classification_check(row, crop_fn=None)
@@ -1081,22 +1204,23 @@ def check_docx(docx_path: str, row: dict, llm_active: bool = False) -> Result:
             if sheet_val == "":
                 res.add(f"{field_name} matches PDF metadata", PASS,
                         f"The loadsheet leaves {field_name} blank (NA), so there is nothing to check.")
+            elif sheet_val == norm(val):
+                res.add(f"{field_name} matches PDF metadata", PASS,
+                        f"The loadsheet {field_name} ({sheet_raw!r}) matches the document's {field_name} property.")
+            elif near_match(sheet_val, norm(val)):
+                res.add(f"{field_name} matches PDF metadata", WARN,
+                        f"The loadsheet {field_name} {sheet_raw!r} and the document's {field_name} property "
+                        f"{val or '(empty)'!r} are nearly identical (a version/spacing difference) - worth a quick look.")
             else:
-                res.add(f"{field_name} matches PDF metadata", PASS if sheet_val == norm(val) else FAIL,
-                        f"The loadsheet {field_name} ({sheet_raw!r}) matches the document's {field_name} property."
-                        if sheet_val == norm(val)
-                        else f"The loadsheet {field_name} is {sheet_raw!r} but the document's {field_name} "
-                             f"property is {val or '(empty)'!r}.")
+                res.add(f"{field_name} matches PDF metadata", FAIL,
+                        f"The loadsheet {field_name} is {sheet_raw!r} but the document's {field_name} "
+                        f"property is {val or '(empty)'!r}.")
 
     # --- DEMO checks (per document): same as the PDF path so parity is preserved ---
     po = row.get("Purchase Order number", row.get("Purchase Order Number", "")).strip()
     res.add("Purchase Order Number is populated and matches document (for Supplier documentation)", PASS,
             "(DEMO) PO system not available -> passed for demo" if norm(po) == ""
             else f"(DEMO) loadsheet PO {po!r}; reference PO data not available -> passed for demo")
-    rev_val = row.get("Revision", "").strip()
-    res.add("Prior revision availability and match", PASS,
-            f"(DEMO) prior-revision repository not available; current revision on sheet = {rev_val or 'NA'!r} "
-            f"-> passed for demo")
     res.add("Check for prior revisions still under review", PASS,
             "(DEMO) document-control review status not available -> passed for demo")
 
@@ -1180,12 +1304,67 @@ Return EXACTLY one result for each of these names:
                               TICKED - a ticked box shows as a filled / crossed box (for example the
                               character U+2612 or a hand-drawn tick / X inside the box), while the others
                               are empty (U+2610). Report the classification next to the ticked box as
-                              document_value (e.g. "Company Use"). Compare it with the loadsheet
+                              document_value (e.g. "Company Use"). If the ticked box's label is a COMPOUND
+                              classification (e.g. "Confidential - Restricted Use"), report ONLY the primary
+                              classification level - the text before any dash "-", slash "/" or comma
+                              (so "Confidential - Restricted Use" -> "Confidential"). Compare it with the loadsheet
                               'Security Classification': same -> PASS; the document clearly shows a
                               DIFFERENT box ticked -> FAIL; loadsheet blank / "NA" -> PASS. If the document
                               has no such block at all, document_value = "(none found)" and PASS.
                               loadsheet_value = the loadsheet 'Security Classification'.
 """
+
+
+# Every check name the LLM is instructed to return - a missing one means the
+# review was incomplete, so it is surfaced as a WARN instead of silently absent.
+EXPECTED_LLM_CHECKS = ["Document Number (LLM)", "Title (LLM)", "Revision (LLM)", "Issue Purpose (LLM)",
+                       "Diagram Number (LLM)", "Contract Number (LLM)", "Author (LLM)", "Producer (LLM)",
+                       "Logos & seals (AI)", "Security Classification (LLM)"]
+
+# LLM FAIL verdicts on these text-comparable fields are cross-checked
+# deterministically before being accepted (a vision model occasionally misreads
+# a rendered page; a hard FAIL should never rest on a misreading alone).
+RECONCILE_FIELDS = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
+                    "Author (LLM)", "Producer (LLM)", "Security Classification (LLM)"}
+
+
+def _vet_llm_checks(raw_checks: list, full_text: str) -> list[dict]:
+    """Validate and reconcile the LLM's JSON before trusting it:
+      * a status outside PASS/FAIL/WARN is coerced to WARN;
+      * every expected check must be present - missing ones are added as WARN;
+      * a FAIL on a text-comparable field is downgraded to WARN when the model's
+        own evidence contradicts the verdict: the two reported values are near
+        matches of each other (e.g. 'Confidential' vs 'Confidential - Restricted
+        Use'), or the loadsheet value appears verbatim in the extracted text.
+        Clean mismatches (genuinely different values) remain hard FAILs."""
+    hay = norm_text(full_text)
+    out, seen = [], set()
+    for c in raw_checks:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name", "check"))
+        status = str(c.get("status", "")).upper()
+        note = ""
+        if status not in (PASS, FAIL, WARN):
+            note = f" [model returned invalid status {c.get('status')!r} - treated as WARN]"
+            status = WARN
+        lv, dv = str(c.get("loadsheet_value") or ""), str(c.get("document_value") or "")
+        if status == FAIL and name in RECONCILE_FIELDS:
+            if near_match(norm(lv), norm(dv)):
+                status = WARN
+                note = " [auto-reconciled: the two values are near matches - flagged for human review instead of a hard fail]"
+            elif len(norm(lv)) >= 4 and norm_text(lv.strip()) in hay:
+                status = WARN
+                note = " [auto-reconciled: the loadsheet value appears verbatim in the document text - flagged for human review]"
+        out.append({"name": name, "status": status,
+                    "loadsheet_value": lv, "document_value": dv,
+                    "evidence": (str(c.get("evidence") or "") + note).strip()})
+        seen.add(name)
+    for name in EXPECTED_LLM_CHECKS:
+        if name not in seen:
+            out.append({"name": name, "status": WARN, "loadsheet_value": "", "document_value": "",
+                        "evidence": "the model did not return this check - review manually"})
+    return out
 
 
 def _render_pages(doc, page_indices, dpi=150):
@@ -1248,24 +1427,30 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
             content.append({"type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{b}", "detail": "high"}})
 
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            max_tokens=4000,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                {"role": "user", "content": content},
-            ],
-        )
+        for attempt in (1, 2):  # one retry if the model returns malformed JSON
+            resp = client.chat.completions.create(
+                model=model,
+                temperature=0,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
+                    {"role": "user", "content": content},
+                ],
+            )
+            _track_usage(resp, f"review {os.path.basename(pdf_path)}")
+            try:
+                raw_checks = json.loads(resp.choices[0].message.content).get("checks", [])
+                break
+            except (ValueError, AttributeError):
+                if attempt == 2:
+                    raise
         # Fields whose value can be located and cropped from the document as evidence.
         snippet_fields = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
                           "Diagram Number (LLM)", "Contract Number (LLM)"}
-        text = resp.choices[0].message.content
-        for c in json.loads(text).get("checks", []):
-            name = c.get("name", "check")
-            status = c.get("status", WARN)
-            lv, dv, ev = c.get("loadsheet_value", ""), c.get("document_value", ""), c.get("evidence", "")
+        for c in _vet_llm_checks(raw_checks, full_text):
+            name, status = c["name"], c["status"]
+            lv, dv, ev = c["loadsheet_value"], c["document_value"], c["evidence"]
             detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
             snip = ""
             if name in snippet_fields:
@@ -1308,25 +1493,230 @@ def check_docx_llm(client, docx_path: str, row: dict, model: str) -> Result | No
             b = base64.b64encode(blob).decode()
             content.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
 
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            max_tokens=4000,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                {"role": "user", "content": content},
-            ],
-        )
-        for c in json.loads(resp.choices[0].message.content).get("checks", []):
-            name = c.get("name", "check")
-            status = c.get("status", WARN)
-            lv, dv, ev = c.get("loadsheet_value", ""), c.get("document_value", ""), c.get("evidence", "")
+        for attempt in (1, 2):  # one retry if the model returns malformed JSON
+            resp = client.chat.completions.create(
+                model=model,
+                temperature=0,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
+                    {"role": "user", "content": content},
+                ],
+            )
+            _track_usage(resp, f"review {os.path.basename(docx_path)}")
+            try:
+                raw_checks = json.loads(resp.choices[0].message.content).get("checks", [])
+                break
+            except (ValueError, AttributeError):
+                if attempt == 2:
+                    raise
+        for c in _vet_llm_checks(raw_checks, full_text):
+            lv, dv, ev = c["loadsheet_value"], c["document_value"], c["evidence"]
             detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
-            res.add(name, status, detail[:300])
+            res.add(c["name"], c["status"], detail[:300])
     except Exception as e:
         res.add("LLM review (could not complete)", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
     return res
+
+
+# ---------------------------------------------------------------------------
+# No-loadsheet mode: LLM metadata extraction + document-only validation
+# ---------------------------------------------------------------------------
+# When the client hands over a document WITHOUT a loadsheet there is nothing to
+# compare against, so the LLM instead READS the document (rendered pages + text)
+# and extracts its own metadata - document number, title, current revision,
+# issue date/purpose, contract/PO number, author, security classification. The
+# extracted document number then feeds the deterministic per-page legibility
+# check, and all the document-quality checks run exactly as usual.
+
+# (JSON key in the model's reply, display label in the report)
+EXTRACT_FIELDS = [
+    ("document_number", "Document Number"),
+    ("title", "Document Title"),
+    ("revision", "Document Revision"),
+    ("issue_date", "Issue Date"),
+    ("issue_purpose", "Issue Purpose"),
+    ("diagram_number", "Diagram Number"),
+    ("contract_or_po_number", "Document Contract number"),
+    ("author", "Author"),
+    ("security_classification", "Security Classification"),
+]
+
+EXTRACT_PROMPT = """You are a senior document-control QA reviewer. NO loadsheet is available for this \
+document, so instead of comparing values you must EXTRACT the document's own metadata (from the rendered \
+page images and the extracted text) so a reviewer can check the document standalone. Read the title block, \
+revision block and revision-history table carefully. Be exact - quote every value as printed.
+
+DOCUMENT FILE NAME: {fname}
+
+FILE METADATA (authoritative for Author / Producer):
+{meta}
+
+Respond with ONLY a JSON object of this exact shape (no prose, no markdown fences):
+{{"fields": {{"document_number": "...", "title": "...", "revision": "...", "issue_date": "...",
+  "issue_purpose": "...", "diagram_number": "...", "contract_or_po_number": "...", "author": "...",
+  "security_classification": "..."}},
+ "checks": [{{"name": "...", "status": "PASS|FAIL|WARN", "document_value": "...", "evidence": "..."}}]}}
+
+Field rules (use "(none found)" when the document genuinely does not show the value):
+  - document_number: the document number printed in the title block / page footers.
+  - title: the document title from the title block (not the file name).
+  - revision: the CURRENT revision - the highest / most recent row of the revision block or
+    revision-history table (the revision the document was issued at), NOT an older historical row.
+  - issue_date: the date of that CURRENT revision.
+  - issue_purpose: the description / status of that CURRENT revision (e.g. "Issued for Construction",
+    "Issued for Review", "Issued for Purchase", "Issued for Use").
+  - diagram_number: any drawing / diagram number shown (often the same as the document number).
+  - contract_or_po_number: any contract number or purchase-order (PO) number printed on the document.
+  - author: the originator / author named in the title block (or the file metadata Author above).
+  - security_classification: find the "Security Classification" block (usually tick-boxes such as
+    COMPANY USE / CONFIDENTIAL / PUBLIC / RESTRICTED) and report WHICH ONE IS TICKED - a ticked box shows
+    as a filled / crossed box (e.g. U+2612 or a hand-drawn tick) while the others are empty (U+2610).
+    "(none found)" if the document has no such block.
+
+Also return EXACTLY these two checks in "checks":
+  "File name consistent with document (AI)" - does the file name above reflect the document number (and,
+      if present in the name, the revision) printed in the document? PASS if it does, WARN if it differs
+      or cannot be judged, FAIL only if it clearly names a DIFFERENT document.
+  "Logos & seals (AI)" - Visually identify EVERY company / vendor logo, engineer's stamp, professional /
+      PE seal, notary seal, approval / QA stamp and signature block visible in the rendered pages. For
+      EACH one, decide whether the text it shows also appears in the EXTRACTED DOCUMENT TEXT below. If ANY
+      of them has text that is NOT in the extracted text, return WARN and quote that text in
+      document_value (it is drawn as an image / vector, so it is not selectable and should be OCR'd).
+      If every logo / stamp / seal's text is also in the extracted text, or there are none, return PASS.
+"""
+
+
+def extract_fields_llm(client, path: str, model: str) -> tuple[Result, dict]:
+    """One LLM call that reads a PDF/DOCX and extracts its key metadata plus the
+    standalone visual checks (file-name consistency, logos & seals). Returns the
+    Result stage (titled 'DOCUMENT (LLM) <name>' so build_report merges it with
+    the deterministic stage) and a dict of the fields that were actually found."""
+    import json
+    fname = os.path.basename(path)
+    is_docx = os.path.splitext(path)[1].lower() == ".docx"
+    res = Result(f"DOCUMENT (LLM)  {fname}")
+    fields: dict[str, str] = {}
+    doc = None
+    try:
+        if is_docx:
+            from docx import Document
+            d = Document(path)
+            full_text = docx_full_text(d)[:30000]
+            cp = d.core_properties
+            producer_val = (docx_application(path) or "").strip()
+            meta_str = "\n".join((f"  Author: {cp.author or '(none)'}",
+                                  f"  Producer: {producer_val or '(none)'}",
+                                  f"  Title: {cp.title or '(none)'}"))
+            imgs = [(ct, base64.b64encode(blob).decode()) for ct, blob in docx_raster_images(d)[:12]]
+        else:
+            doc = fitz.open(path)
+            full_text = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))[:30000]
+            meta = doc.metadata or {}
+            producer_val = (meta.get("producer") or "").strip()
+            meta_str = "\n".join(f"  {label}: {meta.get(key) or '(none)'}"
+                                 for label, key in (("Author", "author"), ("Producer", "producer"),
+                                                    ("Creator", "creator"), ("Title", "title")))
+            imgs = [("image/png", b) for b in _render_pages(doc, sorted({0, 1, 2, doc.page_count - 1}))]
+            imgs += [("image/png", b) for b in _render_titleblock_crops(doc)]
+            sc_uri = crop_security_section(doc, highlight=False)
+            if sc_uri:
+                imgs.append(("image/png", sc_uri.split(",", 1)[1]))
+
+        content = [{"type": "text",
+                    "text": EXTRACT_PROMPT.format(fname=fname, meta=meta_str)
+                    + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
+        for ct, b in imgs:
+            content.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
+
+        for attempt in (1, 2):  # one retry if the model returns malformed JSON
+            resp = client.chat.completions.create(
+                model=model,
+                temperature=0,
+                max_tokens=4000,  # room to return every field without truncation
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
+                    {"role": "user", "content": content},
+                ],
+            )
+            _track_usage(resp, f"extract {fname}")
+            try:
+                data = json.loads(resp.choices[0].message.content)
+                break
+            except (ValueError, AttributeError):
+                if attempt == 2:
+                    raise
+
+        raw_fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        none_vals = ("(NONE FOUND)", "NA", "N/A", "NONE", "(NONE)")
+        for key, label in EXTRACT_FIELDS:
+            v = str(raw_fields.get(key) or "").strip()
+            found = bool(v) and v.upper() not in none_vals
+            if found:
+                fields[key] = v
+            snip = crop_highlight(doc, v, PASS) if (found and doc is not None) else ""
+            res.add(f"{label} (extracted)", PASS if found else WARN,
+                    f"document shows {v!r}" if found
+                    else "not found in the document - review manually if this field is expected", snip)
+        # Producer is authoritative from the file metadata (the LLM cannot read it
+        # visually), so it is reported straight from the properties rather than the
+        # model's JSON - completing the loadsheet-equivalent field set.
+        prod_found = bool(producer_val) and producer_val.upper() not in none_vals
+        if prod_found:
+            fields["producer"] = producer_val
+        res.add("Producer (extracted)", PASS if prod_found else WARN,
+                f"file metadata Producer: {producer_val!r}" if prod_found
+                else "the file records no Producer / authoring application in its metadata")
+        for c in (data.get("checks") or []):
+            if not isinstance(c, dict):
+                continue
+            status = str(c.get("status", "")).upper()
+            if status not in (PASS, FAIL, WARN):
+                status = WARN
+            dv, ev = str(c.get("document_value") or ""), str(c.get("evidence") or "")
+            detail = (f"document={dv!r}" + (f" - {ev}" if ev else "")) if dv else ev
+            res.add(str(c.get("name", "check")), status, detail[:300])
+    except Exception as e:
+        # Fail closed, same as the loadsheet LLM review: an incomplete extraction
+        # must not read as a clean document.
+        res.add("LLM extraction (could not complete)", FAIL, f"{type(e).__name__}: {str(e)[:200]}")
+    finally:
+        if doc is not None:
+            doc.close()
+    return res, fields
+
+
+def run_document_only_validation(doc_paths: list[str], client, model) -> tuple[list[Result], bool]:
+    """No-loadsheet mode: validate documents on their own. The document-quality
+    checks run exactly as usual; the loadsheet<->document comparison is replaced
+    by LLM extraction of the document's own metadata (when the LLM is on), and
+    the extracted document number feeds the per-page legibility check."""
+    reset_llm_usage()
+    results: list[Result] = []
+    for path in doc_paths:
+        is_docx = os.path.splitext(path)[1].lower() == ".docx"
+        ext_res, fields = None, {}
+        if client is not None:
+            t0 = time.perf_counter()
+            ext_res, fields = extract_fields_llm(client, path, model)
+            ext_res.elapsed = time.perf_counter() - t0
+        # Synthetic row from the extracted values. llm_active=True so the
+        # deterministic loadsheet-vs-document content comparison is skipped -
+        # comparing values extracted FROM the document back TO the document
+        # would be circular and always pass.
+        row = {"File Name": os.path.basename(path),
+               "Document Number": fields.get("document_number", ""),
+               "Revision": fields.get("revision", "")}
+        t0 = time.perf_counter()
+        det = (check_docx if is_docx else check_pdf)(path, row, llm_active=True)
+        det.elapsed = time.perf_counter() - t0
+        results.append(det)
+        if ext_res is not None:
+            results.append(ext_res)
+    ok = all(r.ok for r in results)
+    return results, ok
 
 
 # ---------------------------------------------------------------------------
@@ -1341,6 +1731,7 @@ def print_result(res: Result) -> None:
 
 def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[list[Result], bool]:
     """Run both stages and return the Result objects + overall ok flag (no printing)."""
+    reset_llm_usage()  # per-run token accounting (each LLM call logs itself)
     results: list[Result] = []
     t0 = time.perf_counter()
     sheet_res, rows = validate_loadsheet(loadsheet, files_dir)
@@ -1372,16 +1763,17 @@ def run_validation(loadsheet: str, files_dir: str, client, model: str) -> tuple[
 CANON_CHECK = {
     "Document Number consistent": "Document Number",
     "Document Number (LLM)": "Document Number",
-    "Title matches document": "Title",
-    "Title (LLM)": "Title",
+    "Title matches document": "Document Title",
+    "Title (LLM)": "Document Title",
     "Issue Purpose matches document": "Issue Purpose",
     "Issue Purpose (LLM)": "Issue Purpose",
-    "Revision matches document": "Revision",
-    "Revision (LLM)": "Revision",
+    "Revision matches document": "Document Revision",
+    "Revision (LLM)": "Document Revision",
     "Author matches PDF metadata": "Author",
     "Author (LLM)": "Author",
     "Producer matches PDF metadata": "Producer",
     "Producer (LLM)": "Producer",
+    "Contract Number (LLM)": "Document Contract number",
     # NOTE: the two image checks are intentionally NOT merged - "Images are OCR'd"
     # (deterministic, embedded raster images via get_images()) and "Logos & seals
     # (AI)" (LLM, reads the rendered page) are distinct and shown side by side.
@@ -1391,11 +1783,12 @@ CANON_CHECK = {
 def _canon_check(name: str) -> str:
     """Canonical display name for a check. Explicit aliases collapse a
     deterministic check and its LLM twin to one name; anything else just has a
-    trailing '(LLM)' stripped, so AI-only checks (Diagram/Contract Number) read
-    as plain checks in the single unified list rather than an 'AI' variant."""
+    trailing '(LLM)' or '(extracted)' stripped, so AI-only checks (Diagram/Contract
+    Number) and the no-loadsheet extracted fields read as plain checks in the single
+    unified list. '(AI)' is intentionally kept ('Logos & seals (AI)')."""
     if name in CANON_CHECK:
         return CANON_CHECK[name]
-    return re.sub(r"\s*\(LLM\)\s*$", "", name)
+    return re.sub(r"\s*\((?:LLM|extracted)\)\s*$", "", name, flags=re.I)
 
 
 def _merge_doc_checks(det_checks: list[dict], llm_checks: list[dict]) -> list[dict]:
@@ -1433,6 +1826,57 @@ def _merge_doc_checks(det_checks: list[dict], llm_checks: list[dict]) -> list[di
     return list(by.values())
 
 
+# Fixed display order for a document's checks (by normalised concept key - the
+# check name with any '(LLM)'/'(AI)'/'(extracted)' suffix stripped, lower-cased).
+# Concepts not listed keep their original relative order AFTER the ranked ones.
+DOC_CHECK_ORDER = [
+    "document number",
+    "document title",
+    "document revision",
+    "security classification",
+    "issue purpose",
+    "document metadata on each page",
+    "text searchable / selectable",
+    "images are ocr'd",
+    "page orientation consistent",
+    "author",
+    "producer",
+    "revision history is complete",
+    "no markups present on document",
+    "document contract number",
+]
+
+# Shown ONLY when the document actually carries a value for them (otherwise the
+# row is dropped entirely - e.g. a document with no security classification or
+# no contract number does not get an empty 'not found' row).
+CONDITIONAL_CHECKS = {"security classification", "document contract number"}
+
+
+def _check_concept(name: str) -> str:
+    """Ordering/identity key for a check: drop the (LLM)/(AI)/(extracted) suffix
+    and lower-case, so a check reads the same across the loadsheet and
+    document-only (extraction) paths."""
+    return re.sub(r"\s*\((?:llm|ai|extracted)\)\s*$", "", name or "", flags=re.I).strip().lower()
+
+
+def _check_has_value(check: dict) -> bool:
+    """True when a check's notes report an actual detected value (not '(none
+    found)'/NA). Handles both note styles: "document='X'" and "document shows 'X'"."""
+    m = re.search(r"document(?:=|\s+shows\s+)(['\"])(.*?)\1", check.get("detail", "") or "")
+    val = (m.group(2).strip() if m else "")
+    return bool(val) and val.upper() not in ("(NONE FOUND)", "NA", "N/A", "NONE", "(NONE)")
+
+
+def _order_doc_checks(checks: list[dict]) -> list[dict]:
+    """Apply DOC_CHECK_ORDER and drop conditional checks that found no value.
+    Stable, so unranked checks keep their original order after the ranked block."""
+    rank = {c: i for i, c in enumerate(DOC_CHECK_ORDER)}
+    kept = [c for c in checks
+            if not (_check_concept(c["name"]) in CONDITIONAL_CHECKS and not _check_has_value(c))]
+    kept.sort(key=lambda c: rank.get(_check_concept(c["name"]), len(DOC_CHECK_ORDER)))
+    return kept
+
+
 def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
     """Compact, UI-friendly report. Each document's deterministic and LLM checks
     are merged into ONE stage (one list, no repetition); failures are grouped by
@@ -1462,7 +1906,7 @@ def build_report(results: list[Result], ok: bool, loadsheet: str) -> dict:
             stages.append(sd)
 
     for fn, parts in doc_parts.items():
-        merged = _merge_doc_checks(parts["det"], parts["llm"])
+        merged = _order_doc_checks(_merge_doc_checks(parts["det"], parts["llm"]))
         stages.append({"title": f"DOCUMENT   {fn}",
                        "ok": all(c["status"] != FAIL for c in merged),
                        "elapsed": parts["elapsed"],
@@ -1509,6 +1953,7 @@ def validate_one(loadsheet: str, files_dir: str, client, model: str) -> bool:
         print(f"\n  {RED}{BOLD}LOADSHEET INVALID - document checks skipped.{RESET}")
     verdict = (GREEN + "VALID") if ok else (RED + "INVALID")
     print(f"\n  {BOLD}RESULT: {verdict}{RESET}")
+    print_llm_usage_summary(sys.stdout)
     return ok
 
 
@@ -1542,6 +1987,7 @@ def main() -> int:
         target = args.loadsheet or os.path.join(
             LOADSHEET_DIR, f"loadsheet_{'pass' if args.variant == 'both' else args.variant}.csv")
         results, ok = run_validation(target, args.files_dir, client, model)
+        print_llm_usage_summary()  # stderr, so --json stdout stays clean
         import json
         print(json.dumps(build_report(results, ok, target)))
         return 0 if ok else 1
