@@ -900,6 +900,7 @@ def check_pdf(pdf_path: str, row: dict, llm_active: bool = False) -> Result:
 
         content_check("Title matches document", row.get("Title", ""), snippet=True)
         content_check("Issue Purpose matches document", row.get("Issue Purpose", ""), snippet=True)
+        content_check("Issue Date matches document", row.get("Issue Date", ""), kind="date", snippet=True)
 
         # Revision: confirm against revision evidence (filename + rev tables in the text).
         rval = norm(row.get("Revision"))
@@ -1172,6 +1173,7 @@ def check_docx(docx_path: str, row: dict, llm_active: bool = False) -> Result:
 
         content_check("Title matches document", row.get("Title", ""))
         content_check("Issue Purpose matches document", row.get("Issue Purpose", ""))
+        content_check("Issue Date matches document", row.get("Issue Date", ""), kind="date")
 
         # Revision: a .docx has no rendered title block, so the current revision
         # cannot be pinned down deterministically - confirm from the revision text
@@ -1281,6 +1283,10 @@ Return EXACTLY one result for each of these names:
   "Title (LLM)"             - loadsheet 'Title' vs the document title in the title block.
   "Revision (LLM)"          - loadsheet 'Revision' vs the document's current revision.
   "Issue Purpose (LLM)"     - loadsheet 'Issue Purpose' vs the current revision's issue/status description.
+  "Issue Date (LLM)"        - loadsheet 'Issue Date' vs the date of the CURRENT revision shown in the
+                              document (title block / revision block). Dates match if they are the same
+                              calendar date in any format (see the date rule above). WARN if the document
+                              shows no date to compare against.
   "Diagram Number (LLM)"    - loadsheet 'Document Number' vs any drawing/diagram number shown; WARN if none.
   "Contract Number (LLM)"   - any contract/PO number in the doc vs the loadsheet (WARN if neither has one).
   "Author (LLM)"            - loadsheet 'Author' vs the PDF file metadata Author shown above (the originator
@@ -1318,8 +1324,8 @@ Return EXACTLY one result for each of these names:
 # Every check name the LLM is instructed to return - a missing one means the
 # review was incomplete, so it is surfaced as a WARN instead of silently absent.
 EXPECTED_LLM_CHECKS = ["Document Number (LLM)", "Title (LLM)", "Revision (LLM)", "Issue Purpose (LLM)",
-                       "Diagram Number (LLM)", "Contract Number (LLM)", "Author (LLM)", "Producer (LLM)",
-                       "Logos & seals (AI)", "Security Classification (LLM)"]
+                       "Issue Date (LLM)", "Diagram Number (LLM)", "Contract Number (LLM)",
+                       "Author (LLM)", "Producer (LLM)", "Logos & seals (AI)", "Security Classification (LLM)"]
 
 # LLM FAIL verdicts on these text-comparable fields are cross-checked
 # deterministically before being accepted (a vision model occasionally misreads
@@ -1398,19 +1404,173 @@ def _render_titleblock_crops(doc, dpi=220):
     return out
 
 
+# ---------------------------------------------------------------------------
+# LLM delivery strategy: full text, selective images, map-reduce, two-pass read
+# ---------------------------------------------------------------------------
+# GPT-4o's context window (128K tokens) fits far more than the old 30K-character
+# cap, so we now send the WHOLE document text. Only a document whose text exceeds
+# this budget is handled by MAP-REDUCE: one PRIMARY multimodal pass (the first
+# text chunk + the selective images) plus text-only SUPPLEMENTARY passes over the
+# remaining chunks that can only FILL IN fields the primary pass left blank (e.g.
+# a revision table or contract number deep in a long document). Image-based
+# verdicts always come from the primary pass. Images stay SELECTIVE (title-block
+# pages + crops), because image tokens - not text - are the real cost driver.
+LLM_TEXT_BUDGET_CHARS = 200_000    # ~50K tokens of text; leaves room for images + output
+LLM_CHUNK_OVERLAP_CHARS = 2_000
+_NONE_TOKENS = ("(NONE FOUND)", "NA", "N/A", "NONE", "(NONE)", "")
+
+
+def _is_blank_value(v) -> bool:
+    return str(v or "").strip().upper() in _NONE_TOKENS
+
+
+def _chunk_text(text: str, max_chars: int | None = None, overlap: int | None = None) -> list[str]:
+    """Split text into <=max_chars pieces with a small overlap (so a value that
+    straddles a boundary still appears whole in one chunk). Returns a single-item
+    list when the text already fits - the common case, i.e. one call, all text.
+    The budget is read at call time (not bound as a default) so it can be tuned."""
+    text = text or ""
+    max_chars = LLM_TEXT_BUDGET_CHARS if max_chars is None else max_chars
+    overlap = LLM_CHUNK_OVERLAP_CHARS if overlap is None else overlap
+    overlap = min(overlap, max_chars // 2)   # never let overlap stall forward progress
+    if len(text) <= max_chars:
+        return [text]
+    chunks, start, step = [], 0, max(1, max_chars - overlap)
+    while start < len(text):
+        chunks.append(text[start:start + max_chars])
+        start += step
+    return chunks
+
+
+def _chat_json(client, model, content, label: str, max_tokens: int = 4000) -> dict:
+    """One JSON-mode chat call with a single malformed-JSON retry and token
+    logging. Returns the parsed dict (raises if it never parses)."""
+    import json
+    for attempt in (1, 2):
+        resp = client.chat.completions.create(
+            model=model, temperature=0, max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
+                {"role": "user", "content": content},
+            ],
+        )
+        _track_usage(resp, label)
+        try:
+            return json.loads(resp.choices[0].message.content)
+        except (ValueError, AttributeError):
+            if attempt == 2:
+                raise
+    return {}
+
+
+def _merge_supplement_checks(base: list, supp: list) -> list:
+    """Map-reduce REDUCE for review checks: a text-only supplementary chunk may
+    only UPGRADE a base check that found no value to one that did. It can never
+    overturn a verdict the primary (multimodal) pass already made with evidence."""
+    by = {c.get("name"): dict(c) for c in base}
+    for c in supp:
+        name, cur = c.get("name"), by.get(c.get("name"))
+        if cur is None:
+            by[name] = dict(c)
+        elif _is_blank_value(cur.get("document_value")) and not _is_blank_value(c.get("document_value")):
+            by[name] = dict(c)
+    return list(by.values())
+
+
+def _merge_supplement_fields(base: dict, supp: dict) -> dict:
+    """Map-reduce REDUCE for extracted fields: fill in only the keys the primary
+    pass left blank."""
+    out = dict(base or {})
+    for k, v in (supp or {}).items():
+        if _is_blank_value(out.get(k)) and not _is_blank_value(v):
+            out[k] = v
+    return out
+
+
+SC_READ_PROMPT = """You are reading ONLY a 'Security Classification' block cropped from a document.
+It is a set of tick-boxes (e.g. COMPANY USE, CONFIDENTIAL, PUBLIC, RESTRICTED). Decide which ONE box
+is TICKED - a ticked box is filled / crossed (e.g. the character U+2612 or a hand-drawn tick / X),
+the others are empty (U+2610). If the ticked label is a COMPOUND classification (e.g. "Confidential -
+Restricted Use"), report ONLY the primary level - the text before any dash "-", slash "/" or comma
+(so "Confidential - Restricted Use" -> "Confidential"). Respond with ONLY this JSON:
+{"classification": "...", "evidence": "..."}. Use "(none found)" if there is no block or nothing ticked."""
+
+
+def read_security_classification(client, doc, model) -> str | None:
+    """Two-pass 'locate and read' for the security classification (a detected
+    identifier). LOCATE the block by text-searching for its heading and cropping
+    it (crop_security_section), then READ a focused, high-resolution crop in a
+    dedicated call so the model is not distracted by the rest of the document.
+    Returns the classification string, or None when no block is found / it fails.
+    Only meaningful for a rendered (PDF/fitz) document."""
+    try:
+        clean = crop_security_section(doc, highlight=False)
+    except Exception:
+        clean = ""
+    if not clean:
+        return None  # no 'Security Classification' block located
+    b = clean.split(",", 1)[1]
+    content = [{"type": "text", "text": SC_READ_PROMPT},
+               {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b}", "detail": "high"}}]
+    try:
+        data = _chat_json(client, model, content, "read security classification", max_tokens=200)
+        val = str(data.get("classification") or "").strip()
+        return None if _is_blank_value(val) else val
+    except Exception:
+        return None
+
+
+def _sc_override_check(loadsheet_sc: str, doc_sc: str) -> dict:
+    """Build the authoritative 'Security Classification (LLM)' check from the
+    two-pass read, comparing (deterministically) against the loadsheet value."""
+    lv, dv = norm(loadsheet_sc), norm(doc_sc)
+    if lv == "":
+        status = PASS                       # loadsheet does not assert one
+    elif dv == "":
+        status = WARN
+    else:
+        status = PASS if (lv == dv or near_match(lv, dv)) else FAIL
+    return {"name": "Security Classification (LLM)", "status": status,
+            "loadsheet_value": loadsheet_sc or "NA", "document_value": doc_sc,
+            "evidence": "read by a dedicated locate-and-read pass over the classification block"}
+
+
+def _run_review_passes(client, model, prompt: str, full_text: str, imgs: list, label: str) -> list:
+    """Send the review: all text (one primary multimodal pass when it fits) or,
+    for oversized text, a primary pass + text-only supplementary passes that are
+    reduced back together. `imgs` is a list of (mime, base64) tuples. Returns the
+    raw check list."""
+    chunks = _chunk_text(full_text)
+    primary = [{"type": "text", "text": prompt + "\n\nEXTRACTED DOCUMENT TEXT:\n" + chunks[0]}]
+    for mime, b in imgs:
+        primary.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b}", "detail": "high"}})
+    tag = f" [1/{len(chunks)}]" if len(chunks) > 1 else ""
+    checks = _chat_json(client, model, primary, label + tag).get("checks") or []
+    for i, extra in enumerate(chunks[1:], 2):
+        supp = [{"type": "text", "text": prompt
+                 + "\n\n(SUPPLEMENTARY TEXT SECTION of a large document - report ONLY the checks whose "
+                   "value you can find in the text below; leave the rest as '(none found)'.)"
+                   "\n\nEXTRACTED DOCUMENT TEXT:\n" + extra}]
+        checks = _merge_supplement_checks(checks, _chat_json(client, model, supp, f"{label} [{i}/{len(chunks)}]").get("checks") or [])
+    return checks
+
+
 def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None:
     res = Result(f"DOCUMENT (LLM)  {os.path.basename(pdf_path)}")
     try:
         import json
         doc = fitz.open(pdf_path)
-        full_text = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))[:30000]
-        # Title block + revision history live on the first pages and the last sheet.
+        # Send ALL the document text (map-reduce splits it only if it is huge).
+        full_text = "\n".join(doc[p].get_text("text") for p in range(doc.page_count))
+        # Images stay SELECTIVE - title block + revision history live on the first
+        # pages and the last sheet; these are the expensive tokens.
         imgs = _render_pages(doc, sorted({0, 1, 2, doc.page_count - 1}))
         # Extra hi-res crops of the title-block band so small stamp/seal text is legible.
         imgs += _render_titleblock_crops(doc)
         # If the loadsheet marks a security classification, hand the LLM a clean,
-        # high-res crop of the classification section so it can read which box is
-        # ticked (this is the authoritative source for the classification value).
+        # high-res crop of the classification section too. (The authoritative value
+        # comes from the two-pass read below; this just aids the general review.)
         if norm(row.get("Security Classification")):
             sc_uri = crop_security_section(doc, highlight=False)
             if sc_uri:
@@ -1421,33 +1581,21 @@ def check_pdf_llm(client, pdf_path: str, row: dict, model: str) -> Result | None
                                                  ("Creator", "creator"), ("Title", "title")))
 
         sheet = "\n".join(f"  {k.strip()}: {v.strip()}" for k, v in row.items() if v.strip())
-        content = [{"type": "text",
-                    "text": LLM_PROMPT.format(sheet=sheet, meta=meta_str) + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
-        for b in imgs:
-            content.append({"type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b}", "detail": "high"}})
+        prompt = LLM_PROMPT.format(sheet=sheet, meta=meta_str)
+        raw_checks = _run_review_passes(client, model, prompt, full_text,
+                                        [("image/png", b) for b in imgs],
+                                        f"review {os.path.basename(pdf_path)}")
 
-        for attempt in (1, 2):  # one retry if the model returns malformed JSON
-            resp = client.chat.completions.create(
-                model=model,
-                temperature=0,
-                max_tokens=4000,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                    {"role": "user", "content": content},
-                ],
-            )
-            _track_usage(resp, f"review {os.path.basename(pdf_path)}")
-            try:
-                raw_checks = json.loads(resp.choices[0].message.content).get("checks", [])
-                break
-            except (ValueError, AttributeError):
-                if attempt == 2:
-                    raise
+        # Two-pass 'locate and read' for the security classification (detected
+        # identifier): authoritative over whatever the general review reported.
+        sc_val = read_security_classification(client, doc, model)
+        if sc_val is not None:
+            raw_checks = [c for c in raw_checks if c.get("name") != "Security Classification (LLM)"]
+            raw_checks.append(_sc_override_check(row.get("Security Classification", ""), sc_val))
+
         # Fields whose value can be located and cropped from the document as evidence.
         snippet_fields = {"Document Number (LLM)", "Title (LLM)", "Issue Purpose (LLM)",
-                          "Diagram Number (LLM)", "Contract Number (LLM)"}
+                          "Issue Date (LLM)", "Diagram Number (LLM)", "Contract Number (LLM)"}
         for c in _vet_llm_checks(raw_checks, full_text):
             name, status = c["name"], c["status"]
             lv, dv, ev = c["loadsheet_value"], c["document_value"], c["evidence"]
@@ -1473,10 +1621,9 @@ def check_docx_llm(client, docx_path: str, row: dict, model: str) -> Result | No
     renderer is assumed available. No cropped evidence snippets for the same reason."""
     res = Result(f"DOCUMENT (LLM)  {os.path.basename(docx_path)}")
     try:
-        import json
         from docx import Document
         doc = Document(docx_path)
-        full_text = docx_full_text(doc)[:30000]
+        full_text = docx_full_text(doc)  # send all text (map-reduce splits if huge)
         cp = doc.core_properties
         meta_str = "\n".join((
             f"  Author: {(cp.author or '(none)')}",
@@ -1485,32 +1632,11 @@ def check_docx_llm(client, docx_path: str, row: dict, model: str) -> Result | No
             f"  Title: {(cp.title or '(none)')}",
         ))
         sheet = "\n".join(f"  {k.strip()}: {v.strip()}" for k, v in row.items() if v.strip())
-        content = [{"type": "text",
-                    "text": LLM_PROMPT.format(sheet=sheet, meta=meta_str)
-                    + "\n\n(This is a .docx; the images below are the logos/stamps/seals embedded in it.)"
-                    + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
-        for ct, blob in docx_raster_images(doc)[:12]:
-            b = base64.b64encode(blob).decode()
-            content.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
-
-        for attempt in (1, 2):  # one retry if the model returns malformed JSON
-            resp = client.chat.completions.create(
-                model=model,
-                temperature=0,
-                max_tokens=4000,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                    {"role": "user", "content": content},
-                ],
-            )
-            _track_usage(resp, f"review {os.path.basename(docx_path)}")
-            try:
-                raw_checks = json.loads(resp.choices[0].message.content).get("checks", [])
-                break
-            except (ValueError, AttributeError):
-                if attempt == 2:
-                    raise
+        prompt = (LLM_PROMPT.format(sheet=sheet, meta=meta_str)
+                  + "\n\n(This is a .docx; the images below are the logos/stamps/seals embedded in it.)")
+        imgs = [(ct, base64.b64encode(blob).decode()) for ct, blob in docx_raster_images(doc)[:12]]
+        raw_checks = _run_review_passes(client, model, prompt, full_text, imgs,
+                                        f"review {os.path.basename(docx_path)}")
         for c in _vet_llm_checks(raw_checks, full_text):
             lv, dv, ev = c["loadsheet_value"], c["document_value"], c["evidence"]
             detail = (f"loadsheet={lv!r} | document={dv!r}" + (f" - {ev}" if ev else "")) if (lv or dv) else ev
@@ -1624,32 +1750,34 @@ def extract_fields_llm(client, path: str, model: str) -> tuple[Result, dict]:
             if sc_uri:
                 imgs.append(("image/png", sc_uri.split(",", 1)[1]))
 
-        content = [{"type": "text",
-                    "text": EXTRACT_PROMPT.format(fname=fname, meta=meta_str)
-                    + "\n\nEXTRACTED DOCUMENT TEXT:\n" + full_text}]
+        prompt = EXTRACT_PROMPT.format(fname=fname, meta=meta_str)
+        # Send ALL text; map-reduce (a primary multimodal pass + text-only
+        # supplementary passes) only kicks in for a document larger than the budget.
+        chunks = _chunk_text(full_text)
+        primary = [{"type": "text", "text": prompt + "\n\nEXTRACTED DOCUMENT TEXT:\n" + chunks[0]}]
         for ct, b in imgs:
-            content.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
-
-        for attempt in (1, 2):  # one retry if the model returns malformed JSON
-            resp = client.chat.completions.create(
-                model=model,
-                temperature=0,
-                max_tokens=4000,  # room to return every field without truncation
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": "You are a meticulous document-control QA reviewer. Respond with JSON only."},
-                    {"role": "user", "content": content},
-                ],
-            )
-            _track_usage(resp, f"extract {fname}")
-            try:
-                data = json.loads(resp.choices[0].message.content)
-                break
-            except (ValueError, AttributeError):
-                if attempt == 2:
-                    raise
-
+            primary.append({"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b}", "detail": "high"}})
+        tag = f" [1/{len(chunks)}]" if len(chunks) > 1 else ""
+        data = _chat_json(client, model, primary, f"extract {fname}{tag}")
         raw_fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        raw_checks = data.get("checks") or []
+        for i, extra in enumerate(chunks[1:], 2):
+            supp = [{"type": "text", "text": prompt
+                     + "\n\n(SUPPLEMENTARY TEXT SECTION of a large document - fill in ONLY the fields you "
+                       "can find in the text below; leave the rest '(none found)'.)"
+                       "\n\nEXTRACTED DOCUMENT TEXT:\n" + extra}]
+            sdata = _chat_json(client, model, supp, f"extract {fname} [{i}/{len(chunks)}]")
+            raw_fields = _merge_supplement_fields(raw_fields, sdata.get("fields") if isinstance(sdata.get("fields"), dict) else {})
+            raw_checks = _merge_supplement_checks(raw_checks, sdata.get("checks") or [])
+
+        # Two-pass 'locate and read' for the security classification - authoritative
+        # over the general extraction. Rendered (PDF) documents only.
+        if doc is not None:
+            sc_val = read_security_classification(client, doc, model)
+            if sc_val is not None:
+                raw_fields = dict(raw_fields)
+                raw_fields["security_classification"] = sc_val
+
         none_vals = ("(NONE FOUND)", "NA", "N/A", "NONE", "(NONE)")
         for key, label in EXTRACT_FIELDS:
             v = str(raw_fields.get(key) or "").strip()
@@ -1669,7 +1797,7 @@ def extract_fields_llm(client, path: str, model: str) -> tuple[Result, dict]:
         res.add("Producer (extracted)", PASS if prod_found else WARN,
                 f"file metadata Producer: {producer_val!r}" if prod_found
                 else "the file records no Producer / authoring application in its metadata")
-        for c in (data.get("checks") or []):
+        for c in raw_checks:
             if not isinstance(c, dict):
                 continue
             status = str(c.get("status", "")).upper()
@@ -1767,6 +1895,8 @@ CANON_CHECK = {
     "Title (LLM)": "Document Title",
     "Issue Purpose matches document": "Issue Purpose",
     "Issue Purpose (LLM)": "Issue Purpose",
+    "Issue Date matches document": "Issue Date",
+    "Issue Date (LLM)": "Issue Date",
     "Revision matches document": "Document Revision",
     "Revision (LLM)": "Document Revision",
     "Author matches PDF metadata": "Author",
@@ -1835,6 +1965,7 @@ DOC_CHECK_ORDER = [
     "document revision",
     "security classification",
     "issue purpose",
+    "issue date",
     "document metadata on each page",
     "text searchable / selectable",
     "images are ocr'd",

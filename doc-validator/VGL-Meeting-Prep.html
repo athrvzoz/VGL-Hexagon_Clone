@@ -1,0 +1,308 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VGL QA/QC — Meeting Prep &amp; Cross-Question Playbook</title>
+<style>
+  :root{
+    --ink:#12232e; --soft:#4a5b66; --faint:#7c8a93; --line:#d9e0e4; --line2:#eef2f4;
+    --navy:#0b3d5c; --navy2:#0e577f; --wash:#eef5fa; --accent:#0e6ba8;
+    --good:#1c7a4d; --goodw:#e7f4ec; --warn:#9a6410; --warnw:#faf0dd; --crit:#a83224; --critw:#fbeae7;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);color:var(--ink);background:#fff;line-height:1.5;font-size:13.5px}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 30px 60px}
+  h1{font-size:24px;letter-spacing:-.01em;color:var(--navy)}
+  .subtitle{color:var(--soft);font-size:13.5px;margin-top:4px}
+  .stamp{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+  h2{font-size:12px;font-family:var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;
+     padding-top:14px;border-top:2px solid var(--navy)}
+  h3{font-size:16px;color:var(--navy);margin:0 0 3px}
+  p{margin:0 0 8px;color:var(--soft)}
+  strong{color:var(--ink)}
+  .lead{color:var(--ink)}
+  .part{margin-top:30px}
+
+  .anchor{background:var(--navy);color:#eaf3f9;border-radius:10px;padding:18px 22px;margin:18px 0 8px}
+  .anchor .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#8fc4e4}
+  .anchor .big{font-size:16px;font-weight:600;color:#fff;margin:4px 0 12px}
+  .anchor ol{margin:0;padding-left:20px} .anchor li{margin:4px 0;color:#dceaf3;font-size:13px}
+
+  .card{border:1px solid var(--line);border-radius:10px;padding:0;margin:14px 0;overflow:hidden;break-inside:avoid}
+  .card .top{background:var(--wash);padding:12px 16px;border-bottom:1px solid var(--line)}
+  .card .n{font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:700}
+  .card .body{padding:12px 16px}
+  .said{font-size:12.5px;color:var(--soft);font-style:italic;border-left:3px solid var(--line);padding-left:10px;margin:0 0 8px}
+  .resp{font-size:12.5px;background:var(--goodw);border-left:3px solid var(--good);padding:7px 10px;border-radius:0 5px 5px 0;margin:0 0 10px}
+  .resp b,.said b{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:2px}
+  .said b{color:var(--faint)} .resp b{color:var(--good)}
+  .mean{font-size:12.5px;margin:0 0 10px}
+  .mean .lbl{font-weight:700;color:var(--navy)}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+  th{background:var(--navy2);color:#fff;text-align:left;padding:6px 9px;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+  td{padding:7px 9px;border-top:1px solid var(--line2);vertical-align:top;color:var(--soft)}
+  td.q{width:42%;color:var(--ink);font-weight:600}
+  tr:nth-child(even) td{background:#fafcfd}
+  .qa-title{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:10px 0 2px}
+
+  .topic{border:1px solid var(--line);border-radius:10px;margin:12px 0;break-inside:avoid}
+  .topic h3{padding:10px 14px 8px;margin:0}
+  .topic table{margin:0}
+  .topic th:first-child{width:42%}
+
+  .flag{display:inline-block;font-family:var(--mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+        padding:1px 6px;border-radius:4px;font-weight:700;vertical-align:middle;margin-left:6px}
+  .f-comm{background:var(--warnw);color:var(--warn)} .f-disc{background:var(--wash);color:var(--accent)}
+
+  .rules{background:var(--critw);border:1px solid #e6b9b1;border-left:4px solid var(--crit);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .rules h3{color:var(--crit)} .rules ol{margin:6px 0 0 18px} .rules li{margin:5px 0;color:var(--ink);font-size:13px}
+
+  .note{font-size:11.5px;color:var(--faint);margin-top:6px}
+  @media print{
+    body{font-size:11.5px}
+    .wrap{max-width:none;padding:0 6px}
+    .part{page-break-inside:auto}
+    .card,.topic,.anchor,.rules{page-break-inside:avoid}
+    h2{page-break-after:avoid}
+  }
+</style></head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>QA/QC Tool — Client Meeting Prep &amp; Cross-Question Playbook</h1>
+    <div class="subtitle">Venture Global IM review · responses, what they mean, and the follow-ups to expect</div>
+    <div class="stamp">Internal Zensar prep · 19 Aug 2026 · not for distribution</div>
+  </header>
+
+  <div class="anchor">
+    <div class="k">Repeat this whenever you can</div>
+    <div class="big">A standalone QA application + a thin integration layer to SDx — everything runs in VG's Azure tenant, US region, and Document Control only ever sees the exceptions.</div>
+    <div class="k">Three survival rules</div>
+    <ol>
+      <li><strong>Never quote a fixed SLA, precision/recall number, or fixed integration price you haven't validated</strong> — tie it to discovery / the benchmark set.</li>
+      <li><strong>For anything commercial</strong> (IP, who pays the cloud bill, data access, penalties) — "let me confirm the exact terms and come back" is a strong answer.</li>
+      <li><strong>Never say "no"</strong> to a capability — say "feasible; we'll confirm approach and effort in discovery."</li>
+    </ol>
+  </div>
+
+  <!-- ============ PART 1 ============ -->
+  <div class="part">
+    <h2>Part 1 · The five VG feedback points</h2>
+
+    <div class="card">
+      <div class="top"><span class="n">01 · Simplify the results</span></div>
+      <div class="body">
+        <p class="said"><b>VG said</b>QA on checkpoints is very promising; simplify the findings so no time is wasted deciphering them.</p>
+        <p class="resp"><b>Your response</b>During discovery we'll work collaboratively to make the report simpler to read for VG and its vendors.</p>
+        <p class="mean"><span class="lbl">What you're committing to:</span> the engine is accurate; you'll make the <em>output</em> faster to act on — decision-first (Accepted / Needs DC review / Rejected), plain-language findings, passing checks collapsed, detail on drill-down. You are <em>not</em> locking a design yet, which is correct.</p>
+        <div class="qa-title">If they ask → you say</div>
+        <table>
+          <thead><tr><th>Cross-question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td class="q">Can you show a mockup / before-and-after?</td><td>Yes — we'll bring a sample redesign to discovery so we react to something concrete, not words.</td></tr>
+            <tr><td class="q">Who decides what's "simple enough"?</td><td>VG-led. We iterate with your DC team and at least one vendor until it reads right for both.</td></tr>
+            <tr><td class="q">DC and vendors need different things — one report?</td><td>Role-based views: a short summary for vendors, fuller detail for DC. Same engine, different presentation.</td></tr>
+            <tr><td class="q">Will we lose detail we sometimes need?</td><td>No — nothing removed, just collapsed and de-emphasised; drill-down keeps every finding and its evidence.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="n">02 · Ignore logos / company headers in OCR</span></div>
+      <div class="body">
+        <p class="said"><b>VG said</b>OCR needs to ignore/skip text in logos and company headers.</p>
+        <p class="resp"><b>Your response</b>Possible — we can ignore the logos / text in the logo from the OCR check.</p>
+        <p class="mean"><span class="lbl">What you're committing to:</span> excluding header bands and detected logo/stamp regions from the "text must be selectable" check, so branding stops creating noise findings. Low-risk — the tool already detects logo images; this is a scoping change.</p>
+        <div class="qa-title">If they ask → you say</div>
+        <table>
+          <thead><tr><th>Cross-question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td class="q">How do you tell a logo from real content?</td><td>By region (header/footer band) + image-block detection, with a configurable whitelist of known logos/stamps. Edge cases feed the acceptance criteria (point 3).</td></tr>
+            <tr><td class="q">What if the document number sits in the header — skip it too?</td><td>No. We separate decorative branding from <strong>title-block metadata</strong>; title-block text is still checked. We confirm which zones to ignore in discovery.</td></tr>
+            <tr><td class="q">Vendors have different logos/layouts — does it generalise?</td><td>Detection is generic (regions/image blocks), with optional per-vendor tuning for odd layouts.</td></tr>
+            <tr><td class="q">Could ignoring logos make you miss a real OCR problem?</td><td>No — only branding regions are excluded, never body or title-block content; the acceptable-OCR threshold governs the rest.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="n">03 · Quantify acceptable OCR %</span></div>
+      <div class="body">
+        <p class="said"><b>VG said</b>What percentage of OCR within a document is considered acceptable? It needs to be quantified.</p>
+        <p class="resp"><b>Your response</b>During discovery we'll collect inputs, analyse them, and set a mutually-agreed acceptance criterion.</p>
+        <p class="mean"><span class="lbl">What you're committing to:</span> a <strong>measurable, jointly-agreed threshold</strong> (e.g. % of a document's text that is selectable), calibrated on VG's real documents — a defined, auditable rule, <em>not</em> a black box. Keep saying "measurable rule," avoid "we'll train an LLM."</p>
+        <div class="qa-title">If they ask → you say</div>
+        <table>
+          <thead><tr><th>Cross-question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td class="q">What metric exactly — % of pages, words, or area?</td><td>We'll propose candidates (e.g. % of text-bearing content that is selectable, per page and per document) and agree the one that fits your standards.</td></tr>
+            <tr><td class="q">One threshold, or per document type?</td><td>Can be per type/vendor — a dense spec and a scanned drawing shouldn't be judged the same way.</td></tr>
+            <tr><td class="q">Is it measured objectively or by the AI's opinion?</td><td><strong>Deterministically</strong> — we measure actual text-layer coverage; the number is repeatable and auditable, not a model guess.</td></tr>
+            <tr><td class="q">Below acceptable = auto-reject or flag?</td><td>Your call — typically routes to DC review by confidence rather than hard-rejecting. You set the line.</td></tr>
+            <tr><td class="q">What do you need from us to set it?</td><td>A labelled sample of documents your DC has already judged good/bad, so we calibrate to real acceptance behaviour. (Same set answers precision/recall.)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="n">04 · SDx integration <span class="flag f-disc">discovery</span></span></div>
+      <div class="body">
+        <p class="said"><b>VG said</b>Integration with SDx is KEY — auto-pull and pre-QA documents (confidence level / flag items needing DC review) without DC intervention, on submittal upload. May need Extensibility — question for BFS/RevisionZ.</p>
+        <p class="resp"><b>Your response</b>Recommended approach: a custom application for VG with an integration layer to auto-fetch documents from SDx. Extensibility to be confirmed by VG teams; once access is provided, we confirm the integration solution in discovery.</p>
+        <p class="mean"><span class="lbl">What you're committing to (and the deliberate hedge):</span> standalone app + integration layer, auto-fetch on upload, honest dependency on VG for access/extensibility, and confirmation of the exact method <em>after</em> access is granted. Engine is priceable now; integration is priced after discovery. <strong>Hold this line — don't let them extract a fixed integration price or method tomorrow.</strong></p>
+        <div class="qa-title">If they ask → you say</div>
+        <table>
+          <thead><tr><th>Cross-question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td class="q">If you can't confirm the method now, how do we plan/price it?</td><td>The engine is proven and priceable today. The one unknown is the SDx connection — pricing it before validating would be guessing. A short discovery removes the unknown, then we commit.</td></tr>
+            <tr><td class="q">What exactly do you need from us?</td><td>SDx API/Extensibility access, a test/sandbox environment, integration docs, and the right SDx/BFS/Hexagon contact.</td></tr>
+            <tr><td class="q">Read-only or does it write back to SDx?</td><td>It can post the verdict, confidence score and report link back into the workflow so DC sees it in context. Write-back scope confirmed in discovery.</td></tr>
+            <tr><td class="q">Real-time on upload or batch?</td><td>Event-triggered on successful upload if SDx exposes events; otherwise scheduled polling. Either way it's <strong>asynchronous</strong> — it won't slow the contractor's upload.</td></tr>
+            <tr><td class="q">Will it need SDx downtime / affect performance?</td><td>Runs externally and async — no downtime expected; SDx-side work is limited to enabling access.</td></tr>
+            <tr><td class="q">What if BFS/Hexagon say Extensibility isn't available?</td><td>There's a fallback — polling via available APIs or a lighter connector. We design to the most stable interface offered; discovery confirms which. (Never "then it can't be done.")</td></tr>
+            <tr><td class="q">Who fixes it if an SDx upgrade breaks the integration?</td><td>Covered under support/AMS; we design to stable interfaces to minimise the risk.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top"><span class="n">05 · Contractor pre-check (later phase)</span></div>
+      <div class="body">
+        <p class="said"><b>VG said</b>If integrated, perhaps it can be a pre-check for contractors creating submittals; placement in the process affects usability and benefit.</p>
+        <p class="resp"><b>Your response</b>We agree it's beneficial and would bring efficiency; it's possible to integrate with SDx, and at a later stage it can be extended to contractors for initial checks.</p>
+        <p class="mean"><span class="lbl">What you're committing to (and why phasing is right):</span> VG/DC integration first, contractor-facing pre-check later — prove the engine, the integration and the acceptance criteria internally before exposing anything externally.</p>
+        <div class="qa-title">If they ask → you say</div>
+        <table>
+          <thead><tr><th>Cross-question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td class="q">Why not give contractors the pre-check from day one?</td><td>Sequencing reduces risk — prove the engine and lock the criteria with DC first; handing contractors an immature/contested tool creates disputes. Extending it later is straightforward.</td></tr>
+            <tr><td class="q">How would contractors access it?</td><td>A self-service web portal, or a pre-upload check embedded in their flow. Decided in that phase.</td></tr>
+            <tr><td class="q">External contractors touching our system — security?</td><td>Scoped, isolated access; they only validate <strong>their own</strong> documents and never see VG data.</td></tr>
+            <tr><td class="q">Same acceptance criteria as us?</td><td>Yes — shared, transparent criteria means fewer rejected submittals. That's the benefit.</td></tr>
+            <tr><td class="q">Does it cut our DC load or just shift work?</td><td>Both — defects caught at source mean less rework/rejection <em>and</em> lower DC volume.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PART 2 ============ -->
+  <div class="part">
+    <h2>Part 2 · Deployment &amp; architecture playbook</h2>
+    <p class="lead">Condensed cross-questions across the topics they'll probe. <span class="flag f-comm">commercial</span> = confirm with Zensar leadership before committing · <span class="flag f-disc">discovery</span> = defer to discovery.</p>
+
+    <div class="topic">
+      <h3>Deployment</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Who owns and pays for the Azure subscription? <span class="flag f-comm">commercial</span></td><td>Recommended: runs in VG's tenant/subscription — you keep control, residency, and transparent cost. Zensar builds and operates it.</td></tr>
+        <tr><td class="q">Vendor lock-in — what at contract end? <span class="flag f-comm">commercial</span></td><td>No lock-in: standard containers + IaC in your tenant; you own the deliverable/IP. Another team or VG can run it. (Confirm IP terms in SOW.)</td></tr>
+        <tr><td class="q">How long to stand up an environment?</td><td>A deployable environment in days (IaC); full production-grade build is the 14–16 week program.</td></tr>
+        <tr><td class="q">Does it risk our existing systems?</td><td>No — separate app that reads documents and writes back a QA status; it doesn't modify SDx core or your documents.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>Scaling</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">How does it handle volume / surges?</td><td>Queue-based horizontal auto-scaling — workers scale out with the backlog, back down when idle. Transmittals process in parallel.</td></tr>
+        <tr><td class="q">What if we exceed the AI quota in a surge?</td><td>The queue holds the work and drains as fast as quota allows — it doesn't fail. Sustained high volume → Provisioned Throughput (PTU) for reserved capacity.</td></tr>
+        <tr><td class="q">Cold-start latency if it scales to zero?</td><td>A few seconds on the first request after idle; keep a warm instance if that matters (small fixed cost).</td></tr>
+        <tr><td class="q">Will you commit a throughput SLA? <span class="flag f-disc">discovery</span></td><td>After sizing against your real volumes and quota in discovery — a number before that would be a guess.</td></tr>
+        <tr><td class="q">Very large (thousands of pages) documents?</td><td>Full text via map-reduce; image analysis targeted to metadata pages. Large bundles are split into constituent documents first.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>SDx integration (deeper)</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Confidence level — how does routing work?</td><td>High-confidence-clean → auto-pass; uncertain/flagged → routed to DC. DC handles only the exceptions.</td></tr>
+        <tr><td class="q">Does contractor upload get slowed?</td><td>No — QA runs asynchronously after upload; result returns seconds-to-minutes later.</td></tr>
+        <tr><td class="q">Need a Hexagon licence / their cooperation? <span class="flag f-disc">discovery</span></td><td>Possibly, depending on connection method — a discovery question for Hexagon/BFS. The QA app itself is independent, so we're not blocked.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>CI/CD</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">What pipeline?</td><td>Azure DevOps or GitHub Actions: build → automated tests → security scan → container image → Dev → UAT → Prod, with approvals between stages.</td></tr>
+        <tr><td class="q">Releases and rollback?</td><td>Immutable images + IaC → blue-green / staged rollout with instant rollback. Nothing deployed by hand.</td></tr>
+        <tr><td class="q">How do you stop an AI change degrading accuracy?</td><td>The accuracy benchmark runs in the pipeline — a release fails if precision/recall drops below the agreed threshold. Same guard against model drift.</td></tr>
+        <tr><td class="q">Who approves production? Where's the code/IP? <span class="flag f-comm">commercial</span></td><td>VG sign-off gates Prod; repo can be VG-owned or co-owned, pipeline + IaC handed over. (Confirm IP/repo ownership.)</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>Cloud &amp; storage</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Which services?</td><td>Container Apps (compute), Azure OpenAI/GPT-4o (AI), Blob Storage (docs/reports), PostgreSQL (jobs/audit), Service Bus (queue), Key Vault (secrets), App Insights + Monitor, Entra ID (identity).</td></tr>
+        <tr><td class="q">You mentioned S3 — AWS or Azure?</td><td>Azure-native; Blob Storage is the S3 equivalent. Azure fits because SDx and the AI both live there. Portable to AWS (S3/ECS/SQS/Bedrock) if VG standardises there.</td></tr>
+        <tr><td class="q">Which region? Can data stay in the US?</td><td>Yes — all services pinned to a US region; Azure OpenAI is available in US regions. Enforced by config, confirmed in discovery.</td></tr>
+        <tr><td class="q">Hidden/egress costs?</td><td>Main variable cost is AI tokens (transparent, per-document). Egress minimal — storage/compute/AI co-located. Azure adds ~15–40% via support/networking, which we budget.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>Security &amp; compliance</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Does our data leave our environment or train the AI?</td><td>No. Azure OpenAI runs in your subscription; Microsoft does not use your prompts/documents to train models or share them. Point them to Microsoft's Azure OpenAI data terms.</td></tr>
+        <tr><td class="q">Access control?</td><td>Entra ID SSO + role-based access (DC reviewer / admin / read-only), optional Conditional Access and private networking.</td></tr>
+        <tr><td class="q">What access do Zensar staff have to our docs? <span class="flag f-comm">commercial</span></td><td>Least-privilege: devs use non-prod/sample data; prod access restricted, logged, VG-controllable. Defined in discovery.</td></tr>
+        <tr><td class="q">Pen test / accreditation? Export control (ITAR/EAR)?</td><td>Pen test scoped separately (was excluded) — your team or a third party, we support. Export-control classification is VG-led; we enforce US-region + tenant isolation to support it.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>AI / model &amp; accuracy</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">What if it confidently reads the wrong revision (hallucination)?</td><td>Three guards: deterministic cross-checks verify LLM findings against the text; the confidence score routes uncertainty to DC; tuned for high recall so it flags rather than silently passes.</td></tr>
+        <tr><td class="q">What precision/recall will you commit to? <span class="flag f-disc">discovery</span></td><td>A target after we build the labelled benchmark with your DC team and measure per check. Committing before that would be a guess.</td></tr>
+        <tr><td class="q">GPT-4o will be deprecated — then what?</td><td>Model choice is configurable; migrating is a config + re-benchmark exercise, not a rebuild.</td></tr>
+        <tr><td class="q">Can we see why it flagged something?</td><td>Yes — every finding shows the evidence (cropped region / exact values compared). Explainable, not a bare verdict.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>Cost</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Cost per document?</td><td>Typically ~2–4 cents AI cost per document — a fraction of the manual review it replaces.</td></tr>
+        <tr><td class="q">How do we stop runaway cost (a 5,000-page upload)?</td><td>Guardrails: per-document page/size caps, cost-per-run alerts, and large bundles split before processing. Oversized items can be hard-capped or queued for review.</td></tr>
+        <tr><td class="q">Is the AI/Azure bill bundled or pass-through? <span class="flag f-comm">commercial</span></td><td>Recommend pass-through in your subscription — transparent, you see every cent.</td></tr>
+        <tr><td class="q">PTU is a monthly commitment — what if volume is lower?</td><td>We only recommend PTU once volume justifies it (~10k+ docs/month); below that, pay-as-you-go is cheaper with no commitment.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="topic">
+      <h3>Operations, HA &amp; strategy</h3>
+      <table><thead><tr><th>Cross-question</th><th>Answer</th></tr></thead><tbody>
+        <tr><td class="q">Availability, DR, monitoring?</td><td>Managed Azure services with redundancy; geo-redundant storage + DB backups; App Insights/Monitor dashboards for throughput, latency, failures and cost, with alerts.</td></tr>
+        <tr><td class="q">Support after go-live? <span class="flag f-comm">commercial</span></td><td>Optional application management (AMS): monitoring, model upkeep, minor enhancements, incident response — retainer or % of build, scoped to SLA.</td></tr>
+        <tr><td class="q">Why build custom vs buy off-the-shelf?</td><td>Value is in VG-specific rules + SDx integration + your loadsheet/metadata model — off-the-shelf tools don't understand your standards or connect to your workflow.</td></tr>
+        <tr><td class="q">How do we prove value before committing?</td><td>Start with discovery + a scoped pilot on a real document set — measure time saved and accuracy vs your DC baseline, then decide. Low-commitment, evidence-based.</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+
+  <!-- ============ PART 3 ============ -->
+  <div class="part">
+    <h2>Part 3 · Handling the "I don't know exactly" moments</h2>
+    <div class="rules">
+      <h3>Hold these lines</h3>
+      <ol>
+        <li><strong>SDx connection specifics</strong> (API vs Extensibility vs BFS/RevisionZ): "A discovery item we'll lock down with your SDx team and Hexagon — the app is independent, so we're not blocked."</li>
+        <li><strong>Throughput / accuracy numbers:</strong> tie to the discovery benchmark, never a figure you can't defend.</li>
+        <li><strong>Anything net-new:</strong> "Technically feasible; we'll confirm effort and approach in discovery" — never a flat no, never an over-promise.</li>
+        <li><strong>Commercial terms</strong> (IP, who pays, data access, penalties, licensing): "Let me confirm the exact terms and come back."</li>
+        <li><strong>Close on the pilot:</strong> propose discovery + a scoped pilot to prove value before the full build — it credits against the build if they proceed.</li>
+      </ol>
+    </div>
+    <p class="note">Prepared as internal meeting preparation. Cost/accuracy figures are planning estimates, not commitments. Confirm commercial and integration specifics before contracting.</p>
+  </div>
+
+</div>
+</body></html>

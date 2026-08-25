@@ -1,0 +1,223 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VG CP2 — Target Architecture v2</title>
+<style>
+  @page{ size:A4 landscape; margin:9mm; }
+  :root{
+    --ink:#14232d; --soft:#4a5b66; --faint:#7f8d96; --line:#cfd8de; --line2:#e9eef1;
+    --navy:#0b3d5c; --navy2:#0e577f; --wash:#eef5fa; --accent:#0e6ba8;
+    --good:#1c7a4d; --goodw:#e7f4ec; --warn:#9a6410; --warnw:#faf0dd; --crit:#a83224; --critw:#fbeae7;
+    --newc:#1c7a4d; --neww:#e7f4ec; --chg:#9a6410; --chgw:#faf0dd;
+    --sans:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);color:var(--ink);background:#fff;font-size:12px;line-height:1.4}
+  .wrap{max-width:1180px;margin:0 auto;padding:16px 18px 40px}
+  header{margin-bottom:8px}
+  h1{font-size:19px;color:var(--navy);letter-spacing:-.01em}
+  .sub{color:var(--soft);font-size:12px;margin-top:2px}
+  .stamp{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-top:3px}
+
+  .band{border:1px solid var(--line);border-radius:9px;margin:0;padding:8px 10px 10px;position:relative;break-inside:avoid}
+  .band > .bt{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .band .idx{font-family:var(--mono);font-size:10px;font-weight:700;color:#fff;background:var(--navy);border-radius:5px;padding:2px 7px}
+  .band .bname{font-size:12.5px;font-weight:700;color:var(--navy)}
+  .band .bnote{font-size:10.5px;color:var(--faint);margin-left:auto}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+  .box{flex:1 1 150px;min-width:140px;border:1px solid var(--line);border-radius:7px;background:#ffff;padding:7px 9px}
+  .box.plain{background:#fbfdfe}
+  .box .nm{font-weight:700;font-size:11.5px;color:var(--ink)}
+  .box .ds{font-size:10px;color:var(--soft);margin-top:1px}
+  .box .cloud{font-family:var(--mono);font-size:9px;color:var(--accent);margin-top:4px;background:var(--wash);border-radius:4px;padding:1px 5px;display:inline-block}
+  .b-new{border-color:#9ccdb2;background:var(--neww)}
+  .b-chg{border-color:#e2c48f;background:var(--chgw)}
+  .tag{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:4px;vertical-align:middle;margin-left:5px}
+  .t-new{background:var(--newc);color:#fff}
+  .t-chg{background:var(--chg);color:#fff}
+
+  .flow{text-align:center;color:var(--accent);font-size:15px;line-height:1;margin:3px 0}
+  .flow small{display:block;font-family:var(--mono);font-size:8.5px;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;margin-top:1px}
+
+  /* pipeline chain */
+  .chain{display:flex;flex-wrap:wrap;align-items:stretch;gap:0}
+  .stage{flex:1 1 130px;min-width:118px;border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--wash);text-align:center}
+  .stage .st{font-weight:700;font-size:10.5px;color:var(--navy)}
+  .stage .sd{font-size:9px;color:var(--soft);margin-top:1px}
+  .arrowc{display:flex;align-items:center;color:var(--accent);font-weight:700;padding:0 3px}
+  .gate{border-color:#e0b6ae;background:var(--critw)}
+  .pills{display:flex;gap:5px;justify-content:center;margin-top:4px;flex-wrap:wrap}
+  .pill{font-size:9px;font-weight:700;border-radius:9px;padding:2px 8px}
+  .p-ok{background:var(--goodw);color:var(--good)} .p-rev{background:var(--chgw);color:var(--chg)} .p-no{background:var(--critw);color:var(--crit)}
+
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:10.5px;color:var(--soft)}
+  .legend .chip{display:inline-flex;align-items:center;gap:5px}
+  .swatch{width:11px;height:11px;border-radius:3px;display:inline-block;border:1px solid var(--line)}
+
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .infocard{border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+  .infocard h4{font-size:11px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}
+  .infocard ol{margin:0 0 0 16px;padding:0} .infocard li{font-size:10.5px;margin:2px 0;color:var(--soft)}
+  .infocard li b{color:var(--ink)}
+  .fb{font-size:10px;color:var(--crit);font-family:var(--mono)}
+</style></head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>VG CP2 Document Control Automation — Target Architecture (v2)</h1>
+    <div class="sub">Cloud-neutral reference: each platform box notes its <b>AWS | Azure</b> service. Recommend committing to ONE cloud + ONE primary model provider.</div>
+    <div class="stamp">Zensar · proposed · 19 Aug 2026 · <span style="color:var(--newc)">● NEW</span> and <span style="color:var(--chg)">◆ CHANGED</span> vs. v1</div>
+  </header>
+
+  <!-- 1 SOURCES / ACTORS -->
+  <div class="band">
+    <div class="bt"><span class="idx">1</span><span class="bname">Sources &amp; Actors</span><span class="bnote">event-driven on submittal upload · polling as fallback</span></div>
+    <div class="row">
+      <div class="box plain"><div class="nm">Hexagon SDx</div><div class="ds">Source portal · submittals uploaded by contractors</div></div>
+      <div class="box plain"><div class="nm">DC Reviewer</div><div class="ds">Handles only the exceptions (Needs DC Review)</div></div>
+      <div class="box plain"><div class="nm">Contractor <span class="tag t-new">PHASE 2</span></div><div class="ds">Optional self-service pre-check before upload</div></div>
+    </div>
+  </div>
+
+  <div class="flow">▼<small>SDx event / webhook — polling fallback (managed queue, not mutex locks)</small></div>
+
+  <!-- 2 EDGE & ACCESS -->
+  <div class="band">
+    <div class="bt"><span class="idx">2</span><span class="bname">Edge &amp; Access</span><span class="bnote">missing in v1 — added for a production product</span></div>
+    <div class="row">
+      <div class="box b-new"><div class="nm">CDN + WAF <span class="tag t-new">NEW</span></div><div class="ds">Edge protection, DDoS/WAF</div><span class="cloud">CloudFront+WAF | Front Door+WAF</span></div>
+      <div class="box b-new"><div class="nm">API Gateway <span class="tag t-new">NEW</span></div><div class="ds">Rate limits, API keys for downstream</div><span class="cloud">API Gateway | API Management</span></div>
+      <div class="box b-new"><div class="nm">Identity / SSO <span class="tag t-new">NEW</span></div><div class="ds">RBAC: DC / admin / read-only</div><span class="cloud">Cognito | Entra ID</span></div>
+    </div>
+  </div>
+
+  <div class="flow">▼</div>
+
+  <!-- 3 INTEGRATION & ORCHESTRATION -->
+  <div class="band">
+    <div class="bt"><span class="idx">3</span><span class="bname">Integration &amp; Orchestration</span><span class="bnote">stateless &amp; horizontally scalable — no in-memory state</span></div>
+    <div class="row">
+      <div class="box b-chg"><div class="nm">API / Orchestration <span class="tag t-chg">CHANGED</span></div><div class="ds">Stateless service (FastAPI/Express); no in-memory state</div><span class="cloud">ECS Fargate | Container Apps</span></div>
+      <div class="box b-chg"><div class="nm">Managed Queue <span class="tag t-chg">CHANGED</span></div><div class="ds">Replaces polling+mutex; visibility timeout + DLQ</div><span class="cloud">SQS/SNS | Service Bus</span></div>
+      <div class="box b-new"><div class="nm">Object Storage <span class="tag t-new">NEW</span></div><div class="ds">Documents, evidence crops, HTML reports (signed URLs)</div><span class="cloud">S3 | Blob Storage</span></div>
+      <div class="box"><div class="nm">Database</div><div class="ds">Jobs, results, audit trail</div><span class="cloud">RDS/Aurora PG | PostgreSQL</span></div>
+      <div class="box b-new"><div class="nm">Cache / Locks <span class="tag t-new">NEW</span></div><div class="ds">Shared state, dedupe, distributed locks</div><span class="cloud">ElastiCache | Redis</span></div>
+      <div class="box b-new"><div class="nm">Config &amp; Rules <span class="tag t-new">NEW</span></div><div class="ds">Acceptance criteria (OCR %), logo whitelist, per-vendor thresholds — versioned</div></div>
+    </div>
+  </div>
+
+  <div class="flow">▼<small>jobs dispatched to autoscaled Python validation workers</small></div>
+
+  <!-- 4 VALIDATION PIPELINE -->
+  <div class="band">
+    <div class="bt"><span class="idx">4</span><span class="bname">Validation Pipeline</span><span class="bnote">Python workers · autoscale on queue depth · LLM/OCR stages are seconds, not ms</span></div>
+    <div class="chain">
+      <div class="stage"><div class="st">T0 · Pre-flight</div><div class="sd">5 checks · fast</div></div>
+      <div class="arrowc">▶</div>
+      <div class="stage"><div class="st">T1 · Metadata</div><div class="sd">extract · LLM (sec)</div></div>
+      <div class="arrowc">▶</div>
+      <div class="stage"><div class="st">T2 · Quality</div><div class="sd">OCR / layout (sec)</div></div>
+      <div class="arrowc">▶</div>
+      <div class="stage"><div class="st">T2S · Submittal</div><div class="sd">rules</div></div>
+      <div class="arrowc">▶</div>
+      <div class="stage"><div class="st">T3–T4 · Transmittal</div><div class="sd">+ confidence score</div></div>
+      <div class="arrowc">▶</div>
+      <div class="stage gate"><div class="st">T5 · Final gate <span class="tag t-chg">CHANGED</span></div>
+        <div class="pills"><span class="pill p-ok">Accept</span><span class="pill p-rev">Needs DC Review</span><span class="pill p-no">Reject</span></div>
+      </div>
+    </div>
+    <div class="bnote" style="margin-top:6px">◆ <b>New middle outcome “Needs DC Review”</b> driven by the confidence score — this is VG's “confidence level / items requiring DC review”. Only these reach a human.</div>
+  </div>
+
+  <div class="flow">▼ ▲<small>pipeline calls AI/OCR &amp; the model gateway, then returns verdict</small></div>
+
+  <!-- 5 AI / OCR -->
+  <div class="band">
+    <div class="bt"><span class="idx">5</span><span class="bname">AI / OCR Subsystem</span></div>
+    <div class="row">
+      <div class="box"><div class="nm">Extract</div><div class="ds">doc no, rev, title, date, purpose — JSON only</div></div>
+      <div class="box"><div class="nm">Audit / Rule engine</div><div class="ds">loadsheet reconcile, acceptance criteria</div></div>
+      <div class="box"><div class="nm">Classifier + Semantic matcher</div><div class="ds">doc type · embeddings/cosine</div></div>
+      <div class="box"><div class="nm">Content &amp; Logo review</div><div class="ds">logos/headers excluded from OCR check <span class="tag t-chg">CHG</span></div></div>
+      <div class="box b-new"><div class="nm">OCR engine <span class="tag t-new">NEW opt.</span></div><div class="ds">higher-accuracy OCR for poor scans</div><span class="cloud">Textract | Document Intelligence</span></div>
+      <div class="box"><div class="nm">Email / Rejection drafter</div><div class="ds">drafts fail-reason email &amp; notice clause</div></div>
+    </div>
+  </div>
+
+  <div class="flow">▼</div>
+
+  <!-- 6 MODEL GATEWAY -->
+  <div class="band">
+    <div class="bt"><span class="idx">6</span><span class="bname">Model Gateway</span><span class="bnote">abstraction so providers are swappable &amp; governed</span></div>
+    <div class="row">
+      <div class="box b-new"><div class="nm">LLM Router <span class="tag t-new">NEW</span></div><div class="ds">Fallback · cost routing · JSON mode · <b>data-governance guardrail</b> (no training, region-locked)</div></div>
+      <div class="box"><div class="nm">Primary model</div><div class="ds">in-tenant / in-region, compliance-approved</div><span class="cloud">Bedrock (Claude) | Azure OpenAI GPT-4o</span></div>
+      <div class="box plain"><div class="nm">Secondary (optional)</div><div class="ds">only if it passes the same data-governance review</div><span class="cloud">e.g. Gemini — governance-gated</span></div>
+    </div>
+    <div class="bnote" style="margin-top:6px">⚠ v1 wired 2 providers directly (Gemini + Azure OpenAI). For an energy client, route through one governance-approved primary; avoid sending documents across 3 clouds.</div>
+  </div>
+
+  <div class="flow">▼<small>outcomes</small></div>
+
+  <!-- 7 OUTCOMES -->
+  <div class="band">
+    <div class="bt"><span class="idx">7</span><span class="bname">Outcomes &amp; Delivery</span></div>
+    <div class="row">
+      <div class="box"><div class="nm">Write-back to SDx</div><div class="ds">verdict · confidence · report link into the workflow</div></div>
+      <div class="box"><div class="nm">Notification</div><div class="ds">Email (ACS/SES) + Microsoft Teams card with fail reasons</div></div>
+      <div class="box"><div class="nm">Analytics dashboard</div><div class="ds">throughput, accuracy, cost-per-run</div></div>
+      <div class="box b-new"><div class="nm">DC Review UI <span class="tag t-new">NEW</span></div><div class="ds">human-in-the-loop screen for the “Needs DC Review” bucket</div></div>
+    </div>
+    <div class="bnote" style="margin-top:6px"><span class="fb">↺ feedback loop:</span> DC accept/override decisions feed a labelled benchmark that measures precision/recall and tunes acceptance thresholds. <span class="fb">↺ error doc:</span> failed docs → drafter → notification.</div>
+  </div>
+
+  <!-- 8 CROSS-CUTTING PLATFORM -->
+  <div class="band" style="margin-top:9px;background:#fafcfd">
+    <div class="bt"><span class="idx">8</span><span class="bname">Cross-cutting Platform</span><span class="bnote">spans every layer</span></div>
+    <div class="row">
+      <div class="box"><div class="nm">Secrets</div><div class="ds">no creds in code</div><span class="cloud">Secrets Mgr | Key Vault</span></div>
+      <div class="box"><div class="nm">Observability</div><div class="ds">logs, traces, cost metrics, alerts</div><span class="cloud">CloudWatch/X-Ray | App Insights</span></div>
+      <div class="box b-new"><div class="nm">CI/CD + IaC <span class="tag t-new">NEW</span></div><div class="ds">build→test→scan→deploy; accuracy benchmark gate</div><span class="cloud">CodePipeline/GH Actions · Terraform</span></div>
+      <div class="box b-new"><div class="nm">Multi-tenancy <span class="tag t-new">NEW</span></div><div class="ds">isolated data/config per project/client</div></div>
+      <div class="box"><div class="nm">Resilience</div><div class="ds">retry + DLQ, checkpoint resume, zero-doc-loss</div></div>
+      <div class="box"><div class="nm">Cost governance</div><div class="ds">page/size caps, large-bundle split, budget alerts</div></div>
+      <div class="box"><div class="nm">Security &amp; residency</div><div class="ds">encryption, US-region lock, audit trail, export-control aware</div></div>
+    </div>
+  </div>
+
+  <!-- LEGENDS -->
+  <div class="cols2">
+    <div class="infocard">
+      <h4>Key changes from v1</h4>
+      <ol>
+        <li><b>Removed in-memory state</b> → stateless services + Redis (v1's in-memory contradicted horizontal scaling).</li>
+        <li><b>Polling + mutex → managed queue</b> (SQS/Service Bus) with DLQ; SDx events preferred, polling fallback.</li>
+        <li><b>Added object storage</b> (S3/Blob) for docs, evidence &amp; reports — missing in v1.</li>
+        <li><b>Added Edge/WAF, API Gateway, SSO, Secrets, Observability, CI/CD</b> — the platform a product needs.</li>
+        <li><b>Model Gateway</b> in front of the LLM(s), with a data-governance guardrail; consolidate to one approved primary.</li>
+        <li><b>“Needs DC Review” outcome</b> + <b>DC Review UI</b> + <b>feedback loop</b> — confidence routing &amp; accuracy tuning.</li>
+        <li><b>Config &amp; Rules store</b> — acceptance criteria / thresholds are versioned data, not hard-coded.</li>
+      </ol>
+    </div>
+    <div class="infocard">
+      <h4>Cloud decision &amp; the S3 / EC2 question</h4>
+      <ol>
+        <li><b>Pick ONE cloud + ONE primary model.</b> v1 already spans Google + Azure; adding AWS = 3 clouds, 3 governance reviews, cross-cloud egress.</li>
+        <li><b>S3 = yes</b> — object storage is essential (or Azure Blob). Now a first-class box.</li>
+        <li><b>Raw EC2 = avoid.</b> Use managed containers (Fargate/Container Apps); EC2 only if self-hosting a model, which isn't needed with managed LLM APIs.</li>
+        <li><b>If AWS-primary:</b> use <b>Bedrock + Textract</b> to keep data in AWS — don't call Azure OpenAI/Gemini cross-cloud.</li>
+        <li><b>Recommendation:</b> Azure-primary is lower-friction (SDx + Azure OpenAI already there); go AWS only if mandated.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="chip"><span class="swatch" style="background:var(--neww);border-color:#9ccdb2"></span> ● NEW component</span>
+    <span class="chip"><span class="swatch" style="background:var(--chgw);border-color:#e2c48f"></span> ◆ CHANGED from v1</span>
+    <span class="chip"><span class="swatch" style="background:#fff"></span> unchanged</span>
+    <span class="chip"><span class="swatch" style="background:var(--wash);border-color:#bcd">&nbsp;</span> cloud tag = <b style="font-family:var(--mono)">AWS | Azure</b> service</span>
+  </div>
+
+</div>
+</body></html>
